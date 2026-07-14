@@ -660,5 +660,18 @@
       "v0.2.0": "优化配置页UI布局，修复回复消息携带多余类型前缀的问题",
       "v0.1.0": "初始版本"
     }
+  },
+  "UBencodeHelper": {
+    "name": "UBencode 助手",
+    "description": "绑定压制中心、领取任务并将 UBits 源种推送到 MoviePilot 下载器。",
+    "labels": "下载管理,任务管理,通知",
+    "version": "1.1.0",
+    "icon": "ffmpeg.png",
+    "author": "panyugoodboy",
+    "level": 2,
+    "history": {
+      "v1.1.0": "新增测压与正压事件通知、通知历史，并优化配置和任务页面",
+      "v1.0.0": "新增账号绑定、UBits 检测、任务领取、源种推送和基础通知"
+    }
   }
 }
