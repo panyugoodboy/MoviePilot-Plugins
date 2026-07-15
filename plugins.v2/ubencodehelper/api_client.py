@@ -6,7 +6,7 @@ import requests
 
 _CENTER_URL = "https://encode.wuzf.top:53501"
 _CLIENT_NAME = "UBencode"
-_CLIENT_VERSION = "1.4.31"
+_CLIENT_VERSION = "1.5.3"
 
 
 class ApiClientError(RuntimeError):
@@ -116,6 +116,81 @@ class UBencodeApiClient:
                 "version": _CLIENT_VERSION,
                 "device_id": self.device_id,
             },
+        )
+
+    def runtime_clients(self, token: str) -> List[dict]:
+        data = self._request(
+            "GET",
+            "/api/ubencode/runtime-clients",
+            token=token,
+            params={"version": _CLIENT_VERSION, "device_id": self.device_id},
+        )
+        return list(data.get("clients") or [])
+
+    def runtime_status(self, token: str, target_device_id: str = "") -> Dict[str, Any]:
+        return self._request(
+            "GET",
+            "/api/ubencode/runtime-status",
+            token=token,
+            params={
+                "target_device_id": str(target_device_id or ""),
+                "version": _CLIENT_VERSION,
+                "device_id": self.device_id,
+            },
+        )
+
+    def runtime_queues(
+        self,
+        token: str,
+        queue_type: str = "all",
+        page: int = 1,
+        page_size: int = 8,
+        target_device_id: str = "",
+    ) -> Dict[str, Any]:
+        return self._request(
+            "GET",
+            "/api/ubencode/runtime-queues",
+            token=token,
+            params={
+                "target_device_id": str(target_device_id or ""),
+                "queue_type": str(queue_type or "all"),
+                "page": max(1, int(page or 1)),
+                "page_size": min(20, max(1, int(page_size or 8))),
+                "version": _CLIENT_VERSION,
+                "device_id": self.device_id,
+            },
+        )
+
+    def create_remote_command(
+        self,
+        token: str,
+        target_device_id: str,
+        action: str,
+        item_id: str,
+        parameters: Optional[dict] = None,
+        idempotency_key: str = "",
+    ) -> Dict[str, Any]:
+        return self._request(
+            "POST",
+            "/api/ubencode/remote-commands",
+            token=token,
+            payload={
+                **self._refresh_payload(token),
+                "target_device_id": str(target_device_id or ""),
+                "action": str(action or ""),
+                "item_id": str(item_id or ""),
+                "parameters": dict(parameters or {}),
+                "idempotency_key": str(idempotency_key or ""),
+                "expires_in": 120,
+            },
+        )
+
+    def remote_command(self, token: str, command_id: str) -> Dict[str, Any]:
+        return self._request(
+            "GET",
+            f"/api/ubencode/remote-commands/{command_id}",
+            token=token,
+            params={"version": _CLIENT_VERSION, "device_id": self.device_id},
         )
 
     def task_payload(self, token: str, task_id: int) -> Dict[str, Any]:
