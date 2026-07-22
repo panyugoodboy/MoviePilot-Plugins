@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from threading import Lock
 from typing import Any, Callable, Iterable, Mapping, Optional
 from urllib.parse import urlencode
 
@@ -34,6 +35,7 @@ class LibraryDownloadService:
     def __init__(self, store: PluginStore, config: Callable[[], Mapping[str, Any]]):
         self.store = store
         self.config = config
+        self._auto_download_lock = Lock()
 
     def options(self) -> dict:
         sites = [
@@ -181,17 +183,51 @@ class LibraryDownloadService:
         rows = list(candidates.values())
         self.store.replace_candidates("pool", rows)
 
-        queued = []
+        auto_result = None
         if config.get("auto_download") and config.get("pool_auto_download"):
-            limit = max(1, min(50, _int(config.get("auto_batch_limit"), 5)))
-            ordered = self.store.list_candidates(page=1, page_size=limit, scope="pool")["items"]
-            queued = self.dispatch([item["candidate_key"] for item in ordered], automatic=True)
+            auto_result = self.download_from_pool()
         return {
             "found": len(rows),
             "eligible": sum(1 for row in rows if row["eligible"]),
             "errors": errors,
-            "downloads": queued,
+            "downloads": (auto_result or {}).get("downloads", []),
+            "auto_download": auto_result,
         }
+
+    def download_from_pool(self) -> dict:
+        config = self.config()
+        limit = max(1, min(50, _int(config.get("auto_batch_limit"), 5)))
+        if not config.get("auto_download") or not config.get("pool_auto_download"):
+            return {
+                "requested": limit,
+                "attempted": 0,
+                "submitted": 0,
+                "downloads": [],
+                "skipped": [],
+                "message": "自动下载开关未同时开启",
+            }
+
+        with self._auto_download_lock:
+            downloads = []
+            skipped = []
+            attempted = 0
+            for candidate_key in self.store.pending_auto_candidate_keys():
+                result = self._dispatch_one(candidate_key, automatic=True)
+                attempted += 1
+                if result.get("success"):
+                    downloads.append(result)
+                    if len(downloads) >= limit:
+                        break
+                elif len(skipped) < 50:
+                    skipped.append(result)
+            return {
+                "requested": limit,
+                "attempted": attempted,
+                "submitted": len(downloads),
+                "downloads": downloads,
+                "skipped": skipped,
+                "message": f"成功添加 {len(downloads)} / {limit} 个下载",
+            }
 
     def search_targets(self, target_ids: Optional[Iterable[int]] = None) -> dict:
         wanted = {int(value) for value in target_ids or []}

@@ -12,8 +12,16 @@ def cron_preview(
     count: int = 3,
     now: Optional[datetime] = None,
     trigger_class: Any = None,
+    empty_text: str = "",
 ) -> dict:
     value = str(expression or "").strip()
+    if not value and empty_text:
+        return {
+            "valid": None,
+            "expression": "",
+            "times": [],
+            "text": empty_text,
+        }
     try:
         if not value:
             raise ValueError("表达式不能为空")

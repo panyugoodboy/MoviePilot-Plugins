@@ -546,7 +546,7 @@ onBeforeUnmount(() => {
               <VSwitch v-model="bootstrap.config.pool_auto_download" label="允许全站种子池自动下载" color="primary" hide-details />
               <VSwitch v-model="bootstrap.config.allow_same_slot" label="允许相同质量槽位" color="primary" hide-details />
               <VSelect v-model="bootstrap.config.max_versions" label="每个影片/每集最多版本" :items="[1,2,3]" />
-              <VTextField v-model.number="bootstrap.config.auto_batch_limit" type="number" min="1" max="50" label="每轮自动下载上限" />
+              <VTextField v-model.number="bootstrap.config.auto_batch_limit" type="number" min="1" max="50" label="每次自动下载数量" hint="扫描完成和自动下载 Cron 均使用此数量；跳过不合格候选并补位，范围 1–50" persistent-hint />
               <VSelect v-model="bootstrap.config.sites" label="搜索站点（种子池仅使用 UBits）" :items="siteItems" item-title="name" item-value="id" multiple chips closable-chips />
               <VSelect v-model="bootstrap.config.emby_servers" label="Emby 服务" :items="serverItems" multiple chips closable-chips />
               <VTextField v-model="bootstrap.config.movie_save_path" label="电影下载保存路径" hint="留空使用 MoviePilot 默认目录；支持 storage:/path" persistent-hint />
@@ -587,6 +587,7 @@ onBeforeUnmount(() => {
                 <VTextField v-model="bootstrap.config.target_cron" label="目标搜索 Cron" :hint="cronPreview('target_cron').text" :error="cronPreview('target_cron').valid === false" persistent-hint />
                 <VSwitch v-model="bootstrap.config.pool_scan_enabled" label="启用全站种子池定时刷新" color="primary" hide-details />
                 <VTextField v-model="bootstrap.config.pool_cron" label="种子池刷新 Cron" :hint="cronPreview('pool_cron').text" :error="cronPreview('pool_cron').valid === false" persistent-hint />
+                <VTextField v-model="bootstrap.config.auto_download_cron" label="自动下载 Cron（可选）" :hint="cronPreview('auto_download_cron').text" :error="cronPreview('auto_download_cron').valid === false" :disabled="!bootstrap.config.auto_download || !bootstrap.config.pool_auto_download" persistent-hint />
               </div>
             </VCardText></VCard>
             <div class="form-actions"><VBtn type="submit" class="action-btn" color="primary" prepend-icon="mdi-content-save">保存并应用</VBtn></div>

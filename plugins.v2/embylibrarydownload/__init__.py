@@ -23,6 +23,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "inventory_cron": "0 */6 * * *",
     "target_cron": "15 */2 * * *",
     "pool_cron": "30 */2 * * *",
+    "auto_download_cron": "",
     "target_scan_enabled": True,
     "pool_scan_enabled": False,
     "auto_download": False,
@@ -51,7 +52,7 @@ class EmbyLibraryDownload(_PluginBase):
     plugin_name = "联动EMBY库筛选下载"
     plugin_desc = "以 Emby 实际媒体版本为准，按站点和质量规则搜索、限量并下载资源。"
     plugin_icon = "emby.png"
-    plugin_version = "0.2.3"
+    plugin_version = "0.2.4"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "embylibrarydownload_"
@@ -91,6 +92,13 @@ class EmbyLibraryDownload(_PluginBase):
                 "自定义站点种子池刷新",
                 self._config.get("pool_cron") if self._config.get("pool_scan_enabled") else None,
                 self._refresh_pool,
+            ),
+            (
+                "auto-download",
+                "从已扫描种子池自动下载",
+                self._config.get("auto_download_cron")
+                if self._config.get("auto_download") and self._config.get("pool_auto_download") else None,
+                self._auto_download_pool,
             ),
         ]
         for suffix, name, cron, func in definitions:
@@ -168,15 +176,21 @@ class EmbyLibraryDownload(_PluginBase):
 
     def _api_bootstrap(self) -> dict:
         try:
+            cron_previews = {
+                key: cron_preview(self._config.get(key), trigger_class=CronTrigger)
+                for key in ("inventory_cron", "target_cron", "pool_cron")
+            }
+            cron_previews["auto_download_cron"] = cron_preview(
+                self._config.get("auto_download_cron"),
+                trigger_class=CronTrigger,
+                empty_text="未设置，不会定时自动下载",
+            )
             return self._ok({
                 "config": deepcopy(self._config),
                 "options": self._require_service().options(),
                 "stats": self._require_store().stats(),
                 "tasks": deepcopy(self._tasks),
-                "cron_previews": {
-                    key: cron_preview(self._config.get(key), trigger_class=CronTrigger)
-                    for key in ("inventory_cron", "target_cron", "pool_cron")
-                },
+                "cron_previews": cron_previews,
             })
         except Exception as error:
             return self._error(error)
@@ -255,6 +269,9 @@ class EmbyLibraryDownload(_PluginBase):
 
     def _refresh_pool(self) -> dict:
         return self._require_service().refresh_pool(lambda value: self._set_task_progress("pool", value))
+
+    def _auto_download_pool(self) -> dict:
+        return self._require_service().download_from_pool()
 
     def _dispatch_downloads(self, candidate_keys: List[str]) -> dict:
         results = self._require_service().dispatch(candidate_keys, automatic=False)

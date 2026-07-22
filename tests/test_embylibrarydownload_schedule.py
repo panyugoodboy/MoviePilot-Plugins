@@ -56,3 +56,14 @@ def test_cron_preview_returns_visible_error_for_invalid_expression():
 
     assert result["valid"] is False
     assert result["text"] == "表达式无效：wrong number of fields"
+
+
+def test_optional_cron_preview_explains_that_blank_disables_schedule():
+    result = cron_preview("", empty_text="未设置，不会定时自动下载")
+
+    assert result == {
+        "valid": None,
+        "expression": "",
+        "times": [],
+        "text": "未设置，不会定时自动下载",
+    }

@@ -140,6 +140,22 @@ def test_pool_candidates_are_filtered_and_counted_by_quality_category(tmp_path):
     }
 
 
+def test_pending_auto_candidates_exclude_torrents_already_added_to_downloads(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    first = candidate("first")
+    duplicate = candidate("duplicate")
+    duplicate["torrent_key"] = first["torrent_key"]
+    store.replace_candidates("pool", [first, duplicate, candidate("next")])
+
+    job_id, reason = store.reserve_download(
+        "first", ["movie:themoviedb:100"], 3, None, True
+    )
+    assert job_id and not reason
+    store.update_job(job_id, "queued", download_id="download-1")
+
+    assert store.pending_auto_candidate_keys() == ["next"]
+
+
 def test_tv_season_cap_counts_episode_versions(tmp_path):
     store = PluginStore(tmp_path / "state.db")
     episode_key = "tv:themoviedb:20:S01E01"

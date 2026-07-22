@@ -441,6 +441,24 @@ class PluginStore:
             "quality_counts": quality_counts,
         }
 
+    def pending_auto_candidate_keys(self) -> list[str]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT candidate_key FROM candidates AS candidate
+                WHERE scope='pool' AND eligible=1
+                  AND NOT EXISTS (
+                    SELECT 1 FROM download_jobs AS job
+                    WHERE job.torrent_key=candidate.torrent_key
+                      AND job.status IN (?,?,?,?)
+                  )
+                ORDER BY COALESCE(year, 0) DESC, quality_score DESC,
+                         bitrate_mbps DESC, seeders DESC, title
+                """,
+                DUPLICATE_JOB_STATES,
+            ).fetchall()
+        return [str(row["candidate_key"]) for row in rows]
+
     def reserve_download(
         self,
         candidate_key: str,
