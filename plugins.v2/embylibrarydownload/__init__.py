@@ -52,7 +52,7 @@ class EmbyLibraryDownload(_PluginBase):
     plugin_name = "联动EMBY库筛选下载"
     plugin_desc = "以 Emby 实际媒体版本为准，按站点和质量规则搜索、限量并下载资源。"
     plugin_icon = "emby.png"
-    plugin_version = "0.2.7"
+    plugin_version = "0.2.8"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "embylibrarydownload_"
@@ -211,7 +211,13 @@ class EmbyLibraryDownload(_PluginBase):
 
     def _api_create_target(self, payload: Dict[str, Any] = Body(default={})) -> dict:
         try:
-            return self._ok(self._require_store().save_target(payload), "目标已新增")
+            target = self._require_store().save_target(payload)
+            task_name = f"target-pool:{target['id']}"
+            task = self._start_task(
+                task_name, self._require_service().process_target_from_pool, target["id"]
+            )
+            target["pool_task"] = task_name if task.get("success") else None
+            return self._ok(target, "目标已新增，正在匹配已扫描种子池")
         except Exception as error:
             return self._error(error)
 

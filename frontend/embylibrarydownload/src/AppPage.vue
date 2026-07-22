@@ -32,7 +32,20 @@ const confirmDownload = ref(false)
 const targetDialog = ref(false)
 const editingTargetId = ref(null)
 const targetForm = reactive(emptyTarget())
+const recommendationDialog = ref(false)
+const recommendationLoading = ref(false)
+const recommendationSources = ref([])
+const recommendation = reactive({ items: [], source: 'recommend/tmdb_movies', page: 1, canNext: false })
 let pollTimer = null
+
+const builtInRecommendationSources = [
+  { title: 'TMDB 热门电影', value: 'recommend/tmdb_movies' },
+  { title: '豆瓣热门电影', value: 'recommend/douban_movie_hot' },
+  { title: '豆瓣正在热映', value: 'recommend/douban_showing' },
+  { title: '豆瓣新片', value: 'recommend/douban_movies' },
+  { title: '豆瓣电影 Top 250', value: 'recommend/douban_movie_top250' },
+  { title: 'TMDB 流行趋势', value: 'recommend/tmdb_trending' },
+]
 
 const siteItems = computed(() => bootstrap.options.sites || [])
 const serverItems = computed(() => (bootstrap.options.emby_servers || []).map(item => item.name))
@@ -54,6 +67,13 @@ const candidateScopeLabel = computed(() => {
 const hasRunningTask = computed(() => Object.values(bootstrap.tasks || {}).some(task => task.status === 'running'))
 const poolTask = computed(() => bootstrap.tasks?.pool || null)
 const targetTask = computed(() => bootstrap.tasks?.targets || null)
+const targetPoolTask = computed(() => {
+  const tasks = Object.entries(bootstrap.tasks || {})
+    .filter(([name]) => name.startsWith('target-pool:'))
+    .map(([name, task]) => ({ name, ...task }))
+    .sort((left, right) => String(right.started_at || '').localeCompare(String(left.started_at || '')))
+  return tasks[0] || null
+})
 const poolProgress = computed(() => poolTask.value?.progress || {})
 const pageCandidateKeys = computed(() => candidates.items.map(item => item.candidate_key))
 const allPageSelected = computed(() => pageCandidateKeys.value.length > 0 && pageCandidateKeys.value.every(key => selectedCandidates.value.includes(key)))
@@ -103,6 +123,19 @@ async function call(method, path, payload, params) {
     return response?.data
   } catch (error) {
     const message = error?.response?.data?.message || error?.message || '请求失败'
+    actionError.value = message
+    toast?.error?.(message)
+    throw error
+  }
+}
+
+async function callCoreGet(path, params) {
+  try {
+    const response = await props.api.get(String(path || '').replace(/^\//, ''), { params })
+    if (response?.success === false) throw new Error(response.message || '推荐加载失败')
+    return response?.data ?? response
+  } catch (error) {
+    const message = error?.response?.data?.message || error?.message || '推荐加载失败'
     actionError.value = message
     toast?.error?.(message)
     throw error
@@ -221,9 +254,9 @@ async function submitDownloads() {
 
 function emptyTarget() {
   return {
-    media_type: 'movie', media_source: 'themoviedb', media_id: '', title: '', year: null,
-    seasons_text: '', desired_versions: 3, sites: [], profile: {}, save_path: '',
-    auto_download: false, prefer_scanned_pool: false, enabled: true,
+    media_type: 'movie', media_source: 'themoviedb', media_id: '', title: '', original_title: '', year: null,
+    poster_url: '', seasons_text: '', desired_versions: 3, sites: [], profile: {}, save_path: '',
+    auto_download: true, prefer_scanned_pool: true, enabled: true,
   }
 }
 
@@ -241,11 +274,98 @@ async function saveTarget() {
     seasons: String(targetForm.seasons_text || '').split(',').map(value => Number(value.trim())).filter(Boolean),
   }
   delete payload.seasons_text
-  if (editingTargetId.value) await call('put', `/targets/${editingTargetId.value}`, payload)
-  else await call('post', '/targets', payload)
+  const created = !editingTargetId.value
+  const result = created
+    ? await call('post', '/targets', payload)
+    : await call('put', `/targets/${editingTargetId.value}`, payload)
   targetDialog.value = false
-  toast?.success?.('目标已保存')
+  toast?.success?.(created ? '目标已保存，正在匹配已扫描种子池' : '目标已保存')
   await loadTargets()
+  if (result?.pool_task) {
+    await loadOverview()
+    startPolling()
+  }
+}
+
+async function openRecommendationPicker() {
+  recommendationDialog.value = true
+  if (!recommendationSources.value.length) {
+    recommendationSources.value = [...builtInRecommendationSources]
+    try {
+      const extra = await callCoreGet('recommend/source')
+      for (const source of Array.isArray(extra) ? extra : []) {
+        if (!source?.api_path || recommendationSources.value.some(item => item.value === source.api_path)) continue
+        recommendationSources.value.push({ title: source.name, value: source.api_path })
+      }
+    } catch (_) {
+      // 内置推荐仍然可用。
+    }
+  }
+  recommendation.page = 1
+  await loadRecommendations()
+}
+
+async function loadRecommendations() {
+  recommendationLoading.value = true
+  try {
+    const data = await callCoreGet(recommendation.source, { page: recommendation.page, count: 30 })
+    const items = Array.isArray(data) ? data : (data?.items || [])
+    recommendation.items = bootstrap.config.exclude_tv
+      ? items.filter(item => !isTvRecommendation(item))
+      : items
+    recommendation.canNext = items.length >= 20
+  } finally {
+    recommendationLoading.value = false
+  }
+}
+
+async function changeRecommendationSource() {
+  recommendation.page = 1
+  await loadRecommendations()
+}
+
+async function changeRecommendationPage(offset) {
+  recommendation.page = Math.max(1, recommendation.page + offset)
+  await loadRecommendations()
+}
+
+function isTvRecommendation(item) {
+  const type = String(item?.type || '').toLowerCase()
+  return ['tv', '电视剧', '电视节目', 'anime', '动画'].some(value => type.includes(value))
+}
+
+function recommendationPoster(item) {
+  const value = String(item?.poster_path || item?.backdrop_path || '').trim()
+  if (value.startsWith('/')) return `https://image.tmdb.org/t/p/w500${value}`
+  return safeUrl(value)
+}
+
+function selectRecommendation(item) {
+  const source = String(item.source || (
+    item.tmdb_id ? 'themoviedb' : item.douban_id ? 'douban' :
+      item.bangumi_id ? 'bangumi' : item.anilist_id ? 'anilist' : item.imdb_id ? 'imdb' : 'themoviedb'
+  )).toLowerCase()
+  const ids = {
+    themoviedb: item.tmdb_id,
+    douban: item.douban_id,
+    bangumi: item.bangumi_id,
+    anilist: item.anilist_id,
+    imdb: item.imdb_id,
+    tvdb: item.tvdb_id,
+  }
+  Object.assign(targetForm, {
+    media_type: isTvRecommendation(item) ? 'tv' : 'movie',
+    media_source: source,
+    media_id: String(ids[source] || item.media_id || ''),
+    title: item.title || item.original_title || '',
+    original_title: item.original_title || item.en_title || '',
+    year: Number(item.year) || null,
+    poster_url: recommendationPoster(item),
+    auto_download: true,
+    prefer_scanned_pool: true,
+    enabled: true,
+  })
+  recommendationDialog.value = false
 }
 
 async function deleteTarget(target) {
@@ -484,10 +604,23 @@ onBeforeUnmount(() => {
             <div class="button-row"><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-magnify" @click="searchTarget()">搜索全部</VBtn><VBtn class="action-btn" color="primary" prepend-icon="mdi-plus" @click="openTarget()">新增目标</VBtn></div>
           </div>
           <VAlert v-if="!targets.length" type="info" variant="tonal">暂无目标。新增电影或剧集目标后，可手动搜索或启用自动下载。</VAlert>
+          <VAlert v-if="targetPoolTask && ['running','success','failed'].includes(targetPoolTask.status)" :type="targetPoolTask.status === 'failed' ? 'error' : targetPoolTask.status === 'success' ? 'success' : 'info'" variant="tonal" class="mb-4">
+            <div class="d-flex align-center ga-3">
+              <VProgressCircular v-if="targetPoolTask.status === 'running'" indeterminate size="22" width="2" />
+              <VIcon v-else :icon="targetPoolTask.status === 'success' ? 'mdi-check-circle' : 'mdi-alert-circle'" />
+              <span>{{ targetPoolTask.status === 'running' ? '正在从已扫描种子池匹配新目标…' : targetPoolTask.result?.message || targetPoolTask.message }}</span>
+            </div>
+          </VAlert>
           <div class="target-grid">
             <VCard v-for="target in targets" :key="target.id" variant="outlined" class="target-card">
+              <div class="target-poster-wrap">
+                <VImg v-if="safeUrl(target.poster_url)" :src="safeUrl(target.poster_url)" :alt="`${target.title} 海报`" aspect-ratio="2/3" cover class="target-poster" />
+                <div v-else class="target-poster target-poster-empty" role="img" :aria-label="`${target.title} 暂无海报`"><VIcon icon="mdi-movie-open-outline" size="52" /><span>暂无海报</span></div>
+                <div v-if="target.inventory_state === 'present'" class="library-check" aria-label="已在 Emby 媒体库"><VIcon icon="mdi-check-circle" /><span>已入库</span></div>
+              </div>
               <VCardText>
-                <div class="target-top"><div><span class="eyebrow">{{ target.media_type === 'tv' ? 'SERIES' : 'MOVIE' }}</span><h3>{{ target.title }} <small>{{ target.year || '' }}</small></h3></div><div class="target-status"><VChip :color="target.inventory_state === 'present' ? 'success' : target.inventory_state === 'missing' ? 'error' : 'default'" size="small">{{ target.inventory_state === 'present' ? '已入库' : target.inventory_state === 'missing' ? '未入库' : '库存未同步' }}</VChip><VChip :color="target.enabled ? 'primary' : 'default'" size="small" variant="tonal">{{ target.enabled ? '启用' : '停用' }}</VChip></div></div>
+                <div class="target-top"><div><span class="eyebrow">{{ target.media_type === 'tv' ? 'SERIES' : 'MOVIE' }}</span><h3>{{ target.title }} <small>{{ target.year || '' }}</small></h3></div><VChip :color="target.enabled ? 'primary' : 'default'" size="small" variant="tonal">{{ target.enabled ? '启用' : '停用' }}</VChip></div>
+                <div class="target-status mt-3"><VChip :color="target.inventory_state === 'present' ? 'success' : target.inventory_state === 'missing' ? 'warning' : 'default'" size="small" :prepend-icon="target.inventory_state === 'present' ? 'mdi-check' : target.inventory_state === 'missing' ? 'mdi-clock-outline' : 'mdi-help-circle-outline'">{{ target.inventory_state === 'present' ? '已在 Emby' : target.inventory_state === 'missing' ? '等待入库' : '库存未同步' }}</VChip><VChip size="small" variant="tonal">{{ target.inventory_count || 0 }} 个版本</VChip></div>
                 <dl><div><dt>媒体标识</dt><dd>{{ target.media_source }}:{{ target.media_id || '标题识别' }}</dd></div><div><dt>库存记录</dt><dd>{{ target.inventory_count || 0 }}</dd></div><div><dt>版本目标</dt><dd>{{ target.desired_versions }} / 最大 3</dd></div><div><dt>自动下载</dt><dd>{{ target.auto_download ? '是' : '否' }}</dd></div><div><dt>种子池优先</dt><dd>{{ target.prefer_scanned_pool ? '是' : '否' }}</dd></div></dl>
                 <div class="button-row mt-4"><VBtn color="primary" variant="tonal" size="small" prepend-icon="mdi-magnify" @click="quickSearchTarget(target)">快速搜索</VBtn><VBtn variant="text" size="small" @click="showTargetCandidates(target)">查看结果</VBtn><VBtn variant="text" size="small" @click="openTarget(target)">编辑</VBtn><VBtn variant="text" color="error" size="small" @click="deleteTarget(target)">删除</VBtn></div>
               </VCardText>
@@ -624,13 +757,38 @@ onBeforeUnmount(() => {
       <VCard><VCardTitle>确认批量下载</VCardTitle><VCardText>将处理当前选择的 {{ selectedCandidates.length }} 个候选。每个候选仍会执行媒体识别、同质量去重和最多三版本的原子校验，不符合条件的条目不会提交下载器。</VCardText><VCardActions><VSpacer /><VBtn class="action-btn" variant="text" @click="confirmDownload=false">取消</VBtn><VBtn class="action-btn" color="primary" @click="submitDownloads">确认下载</VBtn></VCardActions></VCard>
     </VDialog>
 
+    <VDialog v-model="recommendationDialog" max-width="1180" scrollable>
+      <VCard>
+        <VCardTitle class="dialog-title"><div><span>从自定义推荐选择</span><small>选择影片后会自动填写标题、媒体 ID 和海报</small></div><VBtn icon="mdi-close" variant="text" aria-label="关闭推荐选择" @click="recommendationDialog=false" /></VCardTitle>
+        <VCardText>
+          <div class="recommend-toolbar">
+            <VSelect v-model="recommendation.source" :items="recommendationSources" label="推荐来源" hide-details @update:model-value="changeRecommendationSource" />
+            <div class="recommend-pager"><VBtn variant="tonal" prepend-icon="mdi-chevron-left" :disabled="recommendation.page <= 1 || recommendationLoading" @click="changeRecommendationPage(-1)">上一页</VBtn><span>第 {{ recommendation.page }} 页</span><VBtn variant="tonal" append-icon="mdi-chevron-right" :disabled="!recommendation.canNext || recommendationLoading" @click="changeRecommendationPage(1)">下一页</VBtn></div>
+          </div>
+          <VProgressLinear v-if="recommendationLoading" indeterminate color="primary" class="my-4" aria-label="正在加载推荐" />
+          <VAlert v-else-if="!recommendation.items.length" type="info" variant="tonal" class="mt-4">当前来源没有可用的电影推荐。</VAlert>
+          <div v-else class="recommend-grid mt-4">
+            <VCard v-for="item in recommendation.items" :key="`${item.source}:${item.tmdb_id || item.douban_id || item.media_id || item.title}`" variant="outlined" class="recommend-card">
+              <VImg v-if="recommendationPoster(item)" :src="recommendationPoster(item)" :alt="`${item.title} 海报`" aspect-ratio="2/3" cover class="recommend-poster" loading="lazy" />
+              <div v-else class="recommend-poster target-poster-empty"><VIcon icon="mdi-movie-open-outline" size="42" /></div>
+              <VCardText><strong>{{ item.title }}</strong><small>{{ item.year || '年份未知' }} · {{ item.source || '推荐' }}</small><VBtn block color="primary" variant="tonal" prepend-icon="mdi-target" @click="selectRecommendation(item)">设为搜索目标</VBtn></VCardText>
+            </VCard>
+          </div>
+        </VCardText>
+        <VCardActions><VSpacer /><VBtn variant="text" @click="recommendationDialog=false">取消</VBtn></VCardActions>
+      </VCard>
+    </VDialog>
+
     <VDialog v-model="targetDialog" max-width="820" scrollable>
       <VCard><VCardTitle>{{ editingTargetId ? '编辑目标' : '新增目标' }}</VCardTitle><VCardText><VForm id="target-form" @submit.prevent="saveTarget"><div class="settings-grid">
+        <div class="recommend-entry"><VBtn class="action-btn" color="primary" variant="tonal" prepend-icon="mdi-movie-search" @click="openRecommendationPicker">从自定义推荐选择</VBtn><span>可直接采用 MoviePilot 推荐页及扩展推荐源中的影片。</span></div>
         <VSelect v-model="targetForm.media_type" label="媒体类型" :items="[{title:'电影',value:'movie'},{title:'电视剧',value:'tv'}]" />
         <VTextField v-model="targetForm.title" label="标题" required />
+        <VTextField v-model="targetForm.original_title" label="原始标题或英文名" hint="用于匹配已扫描种子的英文标题" persistent-hint />
         <VTextField v-model.number="targetForm.year" type="number" label="年份" />
-        <VSelect v-model="targetForm.media_source" label="媒体数据源" :items="[{title:'TMDB',value:'themoviedb'},{title:'豆瓣',value:'douban'},{title:'Bangumi',value:'bangumi'},{title:'AniList',value:'anilist'}]" />
+        <VSelect v-model="targetForm.media_source" label="媒体数据源" :items="[{title:'TMDB',value:'themoviedb'},{title:'豆瓣',value:'douban'},{title:'IMDb',value:'imdb'},{title:'TVDB',value:'tvdb'},{title:'Bangumi',value:'bangumi'},{title:'AniList',value:'anilist'}]" />
         <VTextField v-model="targetForm.media_id" label="媒体 ID（推荐填写）" />
+        <VTextField v-model="targetForm.poster_url" label="海报地址（推荐选择时自动填写）" />
         <VTextField v-if="targetForm.media_type === 'tv'" v-model="targetForm.seasons_text" label="季（逗号分隔）" placeholder="1,2" />
         <VSelect v-model="targetForm.desired_versions" label="目标版本数" :items="[1,2,3]" />
         <VSelect v-model="targetForm.sites" label="目标站点（留空使用全局）" :items="siteItems" item-title="name" item-value="id" multiple chips />
@@ -668,11 +826,30 @@ p { color: rgb(var(--v-theme-on-surface-variant)); margin: 0; }
 .pool-tab-label { display: inline-flex; align-items: center; gap: 8px; }
 .desktop-table { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: rgb(var(--v-theme-surface)); }
 .path-cell { display: block; max-width: 440px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.target-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
-.target-card { border-radius: 16px; }
+.target-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; }
+.target-card { border-radius: 16px; overflow: hidden; }
+.target-poster-wrap { position: relative; aspect-ratio: 2 / 3; background: rgb(var(--v-theme-surface-variant)); overflow: hidden; }
+.target-poster { width: 100%; height: 100%; }
+.target-poster-empty { display: grid; place-content: center; justify-items: center; gap: 10px; color: rgb(var(--v-theme-on-surface-variant)); background: linear-gradient(145deg, rgb(var(--v-theme-surface-variant)), rgb(var(--v-theme-surface))); }
+.library-check { position: absolute; top: 12px; right: 12px; display: inline-flex; align-items: center; gap: 5px; min-height: 36px; padding: 6px 10px; border-radius: 999px; color: rgb(var(--v-theme-on-success)); background: rgb(var(--v-theme-success)); font-size: .8rem; font-weight: 800; box-shadow: 0 6px 18px rgba(0,0,0,.24); }
 .target-top { display: flex; justify-content: space-between; gap: 12px; }
-.target-status { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.target-status { display: flex; flex-wrap: wrap; gap: 6px; }
 .target-top small { font-weight: 400; color: rgb(var(--v-theme-on-surface-variant)); }
+.target-card .button-row { flex-wrap: wrap; }
+.target-card .button-row :deep(.v-btn) { min-height: 40px; }
+.dialog-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.dialog-title > div { display: grid; gap: 2px; }
+.dialog-title small { color: rgb(var(--v-theme-on-surface-variant)); font-size: .78rem; font-weight: 400; white-space: normal; }
+.recommend-toolbar { display: grid; grid-template-columns: minmax(240px, 1fr) auto; align-items: center; gap: 16px; }
+.recommend-pager { display: flex; align-items: center; gap: 12px; }
+.recommend-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+.recommend-card { border-radius: 14px; overflow: hidden; }
+.recommend-poster { width: 100%; aspect-ratio: 2 / 3; }
+.recommend-card :deep(.v-card-text) { display: grid; gap: 8px; }
+.recommend-card strong { line-height: 1.35; min-height: 2.7em; }
+.recommend-card small { color: rgb(var(--v-theme-on-surface-variant)); }
+.recommend-entry { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; }
+.recommend-entry span { color: rgb(var(--v-theme-on-surface-variant)); font-size: .86rem; }
 dl { display: grid; gap: 8px; margin: 18px 0 0; }
 dl div { display: flex; justify-content: space-between; gap: 18px; font-size: .86rem; }
 dt { color: rgb(var(--v-theme-on-surface-variant)); }
@@ -687,12 +864,16 @@ dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
 a { color: rgb(var(--v-theme-primary)); text-decoration: none; }
 a:hover { text-decoration: underline; }
 a:focus-visible, button:focus-visible { outline: 3px solid rgb(var(--v-theme-primary)); outline-offset: 2px; }
-@media (max-width: 1100px) { .stat-grid { grid-template-columns: repeat(3, 1fr); } .workflow-grid { grid-template-columns: repeat(2, 1fr); } .target-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 1100px) { .stat-grid { grid-template-columns: repeat(3, 1fr); } .workflow-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 700px) {
   .page-header, .section-heading, .selection-bar { flex-direction: column; align-items: stretch; }
   .button-row { flex-wrap: wrap; }
   .button-row > * { flex: 1 1 auto; }
-  .stat-grid, .target-grid, .settings-grid, .workflow-grid, .filter-row { grid-template-columns: 1fr; }
+  .stat-grid, .target-grid, .settings-grid, .workflow-grid, .filter-row, .recommend-toolbar { grid-template-columns: 1fr; }
+  .recommend-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .recommend-pager { justify-content: space-between; }
+  .recommend-pager :deep(.v-btn) { min-width: 44px; }
+  .recommend-entry { align-items: stretch; flex-direction: column; }
   .desktop-table { display: none; }
   .mobile-list { display: grid; gap: 10px; }
   .mobile-card { border-radius: 14px; overflow: hidden; }

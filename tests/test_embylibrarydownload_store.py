@@ -168,6 +168,20 @@ def test_target_scanned_pool_preference_is_saved_and_defaults_off(tmp_path):
     assert target["prefer_scanned_pool"] is True
 
 
+def test_target_poster_url_is_saved_and_updated(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    target = store.save_target({
+        "title": "电影", "original_title": "Movie",
+        "poster_url": "https://img.example/movie.jpg",
+    })
+
+    assert target["poster_url"] == "https://img.example/movie.jpg"
+    assert target["original_title"] == "Movie"
+
+    target = store.save_target({"title": "Movie", "poster_url": ""}, target["id"])
+    assert target["poster_url"] is None
+
+
 def test_target_list_marks_inventory_presence_and_missing_targets(tmp_path):
     store = PluginStore(tmp_path / "state.db")
     present = store.save_target({
@@ -380,3 +394,29 @@ def test_existing_target_database_adds_scanned_pool_preference_column(tmp_path):
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(targets)")}
 
     assert "prefer_scanned_pool" in columns
+
+
+def test_existing_target_database_adds_poster_url_column(tmp_path):
+    path = tmp_path / "state.db"
+    store = PluginStore(path)
+    with store.connect() as conn:
+        conn.execute("ALTER TABLE targets DROP COLUMN poster_url")
+
+    migrated = PluginStore(path)
+    with migrated.connect() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(targets)")}
+
+    assert "poster_url" in columns
+
+
+def test_existing_target_database_adds_original_title_column(tmp_path):
+    path = tmp_path / "state.db"
+    store = PluginStore(path)
+    with store.connect() as conn:
+        conn.execute("ALTER TABLE targets DROP COLUMN original_title")
+
+    migrated = PluginStore(path)
+    with migrated.connect() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(targets)")}
+
+    assert "original_title" in columns

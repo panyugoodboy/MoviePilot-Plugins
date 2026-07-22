@@ -101,6 +101,8 @@ class PluginStore:
                     media_source TEXT NOT NULL DEFAULT 'themoviedb',
                     media_id TEXT,
                     title TEXT NOT NULL,
+                    original_title TEXT,
+                    poster_url TEXT,
                     year INTEGER,
                     seasons_json TEXT NOT NULL DEFAULT '[]',
                     desired_versions INTEGER NOT NULL DEFAULT 1,
@@ -189,6 +191,10 @@ class PluginStore:
             target_columns = {row["name"] for row in conn.execute("PRAGMA table_info(targets)")}
             if "prefer_scanned_pool" not in target_columns:
                 conn.execute("ALTER TABLE targets ADD COLUMN prefer_scanned_pool INTEGER NOT NULL DEFAULT 0")
+            if "poster_url" not in target_columns:
+                conn.execute("ALTER TABLE targets ADD COLUMN poster_url TEXT")
+            if "original_title" not in target_columns:
+                conn.execute("ALTER TABLE targets ADD COLUMN original_title TEXT")
 
     def replace_inventory(self, server_name: str, rows: list[Mapping[str, Any]]) -> int:
         now = utcnow()
@@ -326,10 +332,13 @@ class PluginStore:
             + " AND ".join(clauses),
             params,
         ).fetchall()
-        title = _normalize_title(target.get("title"))
+        titles = {
+            _normalize_title(target.get("title")),
+            _normalize_title(target.get("original_title")),
+        } - {""}
         return len({
             row["version_key"] for row in rows
-            if title and title in {_normalize_title(row["title"]), _normalize_title(row["original_title"])}
+            if titles.intersection({_normalize_title(row["title"]), _normalize_title(row["original_title"])})
         })
 
     def get_target(self, target_id: int) -> Optional[dict]:
@@ -348,6 +357,8 @@ class PluginStore:
             "media_source": str(payload.get("media_source") or "themoviedb"),
             "media_id": _none(payload.get("media_id") or payload.get("tmdb_id")),
             "title": str(payload.get("title") or "").strip(),
+            "original_title": _none(payload.get("original_title")),
+            "poster_url": _none(payload.get("poster_url")),
             "year": _int(payload.get("year")) or None,
             "seasons_json": dumps(payload.get("seasons") or []),
             "desired_versions": desired,
@@ -367,7 +378,9 @@ class PluginStore:
                 result = conn.execute(
                     """
                     UPDATE targets SET media_type=:media_type, media_source=:media_source,
-                        media_id=:media_id, title=:title, year=:year, seasons_json=:seasons_json,
+                        media_id=:media_id, title=:title, original_title=:original_title,
+                        poster_url=:poster_url,
+                        year=:year, seasons_json=:seasons_json,
                         desired_versions=:desired_versions, sites_json=:sites_json,
                         profile_json=:profile_json, save_path=:save_path,
                         auto_download=:auto_download, prefer_scanned_pool=:prefer_scanned_pool,
@@ -383,11 +396,13 @@ class PluginStore:
                 cursor = conn.execute(
                     """
                     INSERT INTO targets (
-                        media_type, media_source, media_id, title, year, seasons_json,
+                        media_type, media_source, media_id, title, original_title,
+                        poster_url, year, seasons_json,
                         desired_versions, sites_json, profile_json, save_path,
                         auto_download, prefer_scanned_pool, enabled, created_at, updated_at
                     ) VALUES (
-                        :media_type, :media_source, :media_id, :title, :year, :seasons_json,
+                        :media_type, :media_source, :media_id, :title, :original_title,
+                        :poster_url, :year, :seasons_json,
                         :desired_versions, :sites_json, :profile_json, :save_path,
                         :auto_download, :prefer_scanned_pool, :enabled, :created_at, :updated_at
                     )

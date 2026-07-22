@@ -22,6 +22,7 @@ is_series_title = quality_module.is_series_title
 tv_exclusion_reason = quality_module.tv_exclusion_reason
 select_save_path = quality_module.select_save_path
 prioritize_pool_candidates = quality_module.prioritize_pool_candidates
+matching_pool_candidates = quality_module.matching_pool_candidates
 
 
 def test_classifies_diy_dolby_vision_and_bitrate():
@@ -164,3 +165,43 @@ def test_scanned_target_priority_requires_target_site_year_and_filter_match():
     }
 
     assert prioritize_pool_candidates([candidate], [target], {}, [7])[0][1] is None
+
+
+def test_new_target_pool_matches_follow_target_quality_order():
+    target = {
+        "id": 1, "enabled": True, "auto_download": True, "prefer_scanned_pool": True,
+        "media_type": "movie", "title": "Dune Part Two", "year": 2024,
+        "sites": [7], "profile": {"quality_types": ["webdl", "remux"]},
+    }
+    remux = {
+        "candidate_key": "remux", "eligible": True,
+        "title": "Dune.Part.Two.2024.2160p.Remux", "year": 2024, "site_id": 7,
+        "quality_type": "remux", "quality_effect": "dv", "resolution": "2160p",
+        "video_codec": "h265", "bitrate_mbps": 70, "seeders": 20,
+    }
+    webdl = {
+        "candidate_key": "webdl", "eligible": True,
+        "title": "Dune.Part.Two.2024.2160p.WEB-DL", "year": 2024, "site_id": 7,
+        "quality_type": "webdl", "quality_effect": "hdr", "resolution": "2160p",
+        "video_codec": "h265", "bitrate_mbps": 20, "seeders": 10,
+    }
+    unrelated = {**webdl, "candidate_key": "other", "title": "Other.Movie.2024.2160p.WEB-DL"}
+
+    matches = matching_pool_candidates([remux, unrelated, webdl], target, {}, [7])
+
+    assert [item["candidate_key"] for item in matches] == ["webdl", "remux"]
+
+
+def test_recommended_target_matches_scanned_pool_by_original_title():
+    target = {
+        "media_type": "movie", "title": "沙丘2", "original_title": "Dune Part Two",
+        "year": 2024, "sites": [7], "profile": {},
+    }
+    candidate = {
+        "candidate_key": "dune", "eligible": True,
+        "title": "Dune.Part.Two.2024.2160p.Remux", "year": 2024, "site_id": 7,
+        "quality_type": "remux", "quality_effect": "dv", "resolution": "2160p",
+        "video_codec": "h265", "bitrate_mbps": 70, "seeders": 20,
+    }
+
+    assert matching_pool_candidates([candidate], target, {}, [7]) == [candidate]

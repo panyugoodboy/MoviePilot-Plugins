@@ -230,6 +230,35 @@ def prioritize_pool_candidates(
     return preferred + regular
 
 
+def matching_pool_candidates(
+    candidates: Iterable[Mapping[str, Any]],
+    target: Mapping[str, Any],
+    base_profile: Mapping[str, Any],
+    default_sites: Optional[Iterable[Any]] = None,
+) -> list[Mapping[str, Any]]:
+    """Return scanned pool candidates matching one target in target preference order."""
+
+    profile = merge_profile(base_profile, target.get("profile"))
+    matches = [
+        candidate for candidate in candidates
+        if _pool_candidate_matches_target(
+            candidate,
+            target,
+            profile,
+            target.get("sites") or default_sites,
+        )
+    ]
+    return sorted(
+        matches,
+        key=lambda candidate: (
+            profile_score(_candidate_quality(candidate), profile),
+            _as_int(candidate.get("seeders")),
+            str(candidate.get("title") or ""),
+        ),
+        reverse=True,
+    )
+
+
 def _pool_candidate_matches_target(
     candidate: Mapping[str, Any],
     target: Mapping[str, Any],
@@ -246,16 +275,7 @@ def _pool_candidate_matches_target(
     if target_year and candidate_year and target_year != candidate_year:
         return False
 
-    quality = QualityInfo(
-        quality_type=str(candidate.get("quality_type") or "unknown"),
-        effect=str(candidate.get("quality_effect") or "unknown"),
-        resolution=str(candidate.get("resolution") or "unknown"),
-        video_codec=str(candidate.get("video_codec") or "unknown"),
-        bitrate_mbps=_as_float(candidate.get("bitrate_mbps")),
-        year=candidate_year or None,
-        score=_as_int(candidate.get("quality_score")),
-        slot=str(candidate.get("quality_slot") or ""),
-    )
+    quality = _candidate_quality(candidate)
     if not quality_matches(str(candidate.get("title") or ""), quality, profile)[0]:
         return False
 
@@ -264,8 +284,11 @@ def _pool_candidate_matches_target(
     if target_media_id and candidate_media_id:
         return target_media_id == candidate_media_id
 
-    target_title = _normalize_media_title(target.get("title"))
-    if not target_title:
+    target_titles = {
+        _normalize_media_title(target.get("title")),
+        _normalize_media_title(target.get("original_title")),
+    } - {""}
+    if not target_titles:
         return False
     meta = candidate.get("meta") if isinstance(candidate.get("meta"), Mapping) else {}
     media = candidate.get("media") if isinstance(candidate.get("media"), Mapping) else {}
@@ -274,9 +297,25 @@ def _pool_candidate_matches_target(
         meta.get("name"), meta.get("cn_name"), meta.get("en_name"), meta.get("original_name"),
         media.get("title"), media.get("original_title"), media.get("en_title"),
     )
+    normalized_candidates = [
+        f" {_normalize_media_title(value)} " for value in candidate_titles if value
+    ]
     return any(
-        f" {target_title} " in f" {_normalize_media_title(value)} "
-        for value in candidate_titles if value
+        f" {target_title} " in candidate_title
+        for target_title in target_titles for candidate_title in normalized_candidates
+    )
+
+
+def _candidate_quality(candidate: Mapping[str, Any]) -> QualityInfo:
+    return QualityInfo(
+        quality_type=str(candidate.get("quality_type") or "unknown"),
+        effect=str(candidate.get("quality_effect") or "unknown"),
+        resolution=str(candidate.get("resolution") or "unknown"),
+        video_codec=str(candidate.get("video_codec") or "unknown"),
+        bitrate_mbps=_as_float(candidate.get("bitrate_mbps")),
+        year=_as_int(candidate.get("year")) or None,
+        score=_as_int(candidate.get("quality_score")),
+        slot=str(candidate.get("quality_slot") or ""),
     )
 
 

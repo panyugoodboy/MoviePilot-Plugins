@@ -22,6 +22,7 @@ from .quality import (
     apply_source_quality_type,
     classify_quality,
     is_series_title,
+    matching_pool_candidates,
     merge_profile,
     prioritize_pool_candidates,
     profile_score,
@@ -238,6 +239,75 @@ class LibraryDownloadService:
                 "skipped": skipped,
                 "message": f"成功添加 {len(downloads)} / {limit} 个下载",
             }
+
+    def process_target_from_pool(self, target_id: int) -> dict:
+        """Match a newly created target against the existing pool and download it first."""
+
+        target = self.store.get_target(target_id)
+        if not target or not target.get("enabled"):
+            raise RuntimeError("目标不存在或未启用")
+        config = self.config()
+        matches = matching_pool_candidates(
+            self.store.pending_auto_candidates(),
+            target,
+            self._base_profile(),
+            _ids(config.get("sites")),
+        )
+        target_rows = []
+        for index, candidate in enumerate(matches):
+            row = dict(candidate)
+            row.update({
+                "candidate_key": hashlib.sha256(
+                    f"target:{target_id}|{candidate['torrent_key']}".encode()
+                ).hexdigest(),
+                "target_id": target_id,
+                "quality_score": len(matches) - index,
+                "torrent_json": dumps(candidate.get("torrent") or {}),
+                "meta_json": dumps(candidate.get("meta") or {}),
+                "media_json": dumps(candidate.get("media") or {}),
+                "media_keys_json": dumps(candidate.get("media_keys") or []),
+            })
+            target_rows.append(row)
+        self.store.replace_candidates(f"target:{target_id}", target_rows)
+
+        auto_enabled = all((
+            config.get("auto_download"),
+            config.get("pool_auto_download"),
+            target.get("auto_download"),
+            target.get("prefer_scanned_pool"),
+        ))
+        if not auto_enabled:
+            return {
+                "target_id": target_id,
+                "matched": len(target_rows),
+                "submitted": 0,
+                "downloads": [],
+                "message": f"匹配到 {len(target_rows)} 个候选，自动下载开关未全部开启",
+            }
+
+        limit = min(
+            max(1, min(50, _int(config.get("auto_batch_limit"), 5))),
+            max(1, min(3, _int(target.get("desired_versions"), 1))),
+        )
+        downloads, skipped = [], []
+        for candidate in target_rows:
+            result = self._dispatch_one(
+                candidate["candidate_key"], automatic=True, target_override=target
+            )
+            if result.get("success"):
+                downloads.append(result)
+                if len(downloads) >= limit:
+                    break
+            elif len(skipped) < 50:
+                skipped.append(result)
+        return {
+            "target_id": target_id,
+            "matched": len(target_rows),
+            "submitted": len(downloads),
+            "downloads": downloads,
+            "skipped": skipped,
+            "message": f"匹配到 {len(target_rows)} 个候选，成功添加 {len(downloads)} 个下载",
+        }
 
     def search_targets(
         self, target_ids: Optional[Iterable[int]] = None, allow_auto_download: bool = True
