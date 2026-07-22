@@ -238,6 +238,13 @@ def test_recommendation_list_reports_each_poster_inventory_state(tmp_path):
     assert [item["inventory_state"] for item in result["items"]] == ["present", "missing"]
     assert result["items"][0]["poster_url"].endswith("present.jpg")
 
+    assert store.target_inventory_stats() == {
+        "lists": 1,
+        "items": 2,
+        "present": 1,
+        "missing": 1,
+    }
+
 
 def test_recommendation_list_requires_items(tmp_path):
     store = PluginStore(tmp_path / "state.db")

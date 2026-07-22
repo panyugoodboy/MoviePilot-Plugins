@@ -13,9 +13,9 @@ def test_manifest_matches_plugin_version_and_name():
     entry = manifest["EmbyLibraryDownload"]
 
     assert entry["name"] == "联动EMBY库筛选下载"
-    assert entry["version"] == "0.2.9"
+    assert entry["version"] == "0.3.0"
     assert entry["release"] is True
-    assert 'plugin_version = "0.2.9"' in source
+    assert 'plugin_version = "0.3.0"' in source
     assert '"auto_download_cron": ""' in source
     assert 'plugin_icon = "emby.png"' in source
 
@@ -32,6 +32,15 @@ def test_manifest_matches_plugin_version_and_name():
     assert 'target.items || [target]' in page
     assert 'mdi-check-circle' in page
     assert 'auto_download: true, prefer_scanned_pool: true' in page
+    assert '"notify_enabled": True' in source
+    assert '"notify_inventory": True' in source
+    assert '"notify_targets": True' in source
+    assert '"notify_pool": True' in source
+    assert '"notify_download": True' in source
+    assert '"notify_failures": True' in source
+    assert '汇总通知已开启' in page
+    assert '发送测试通知' in page
+    assert '/notifications/test' in source
 
 
 def test_remote_entry_references_existing_build_assets():

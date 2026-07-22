@@ -342,6 +342,21 @@ class PluginStore:
                     })
         return targets
 
+    def target_inventory_stats(self) -> dict:
+        targets = [target for target in self.list_targets(with_inventory=True) if target.get("enabled")]
+        items = sum(int(target.get("item_count") or 1) for target in targets)
+        present = sum(
+            int(target.get("in_library_count"))
+            if target.get("items") else int(bool(target.get("in_library")))
+            for target in targets
+        )
+        return {
+            "lists": len(targets),
+            "items": items,
+            "present": present,
+            "missing": max(0, items - present),
+        }
+
     @staticmethod
     def _target_inventory_count(conn: sqlite3.Connection, target: Mapping[str, Any]) -> int:
         media_type = str(target.get("media_type") or "movie").lower()

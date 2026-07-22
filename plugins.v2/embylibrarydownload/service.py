@@ -101,7 +101,11 @@ class LibraryDownloadService:
             total += len(rows)
             server_results.append({"server": name, "libraries": len(library_ids), "versions": len(rows)})
         self.store.mark_inventory_synced()
-        return {"versions": total, "servers": server_results}
+        return {
+            "versions": total,
+            "servers": server_results,
+            "targets": self.store.target_inventory_stats(),
+        }
 
     def refresh_pool(self, progress: Optional[Callable[[Mapping[str, Any]], None]] = None) -> dict:
         config = self.config()
@@ -193,6 +197,8 @@ class LibraryDownloadService:
         return {
             "found": len(rows),
             "eligible": sum(1 for row in rows if row["eligible"]),
+            "completed_pages": completed_pages,
+            "total_sources": total_sources,
             "errors": errors,
             "downloads": (auto_result or {}).get("downloads", []),
             "auto_download": auto_result,

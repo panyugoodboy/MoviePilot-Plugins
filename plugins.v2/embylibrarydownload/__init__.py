@@ -9,7 +9,9 @@ from fastapi import Body
 
 from app.log import logger
 from app.plugins import _PluginBase
+from app.schemas.types import NotificationType
 
+from .notifications import build_task_summary, build_test_summary
 from .schedule import cron_preview
 from .service import LibraryDownloadService
 from .store import PluginStore
@@ -45,6 +47,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "include_words": "",
     "exclude_words": "CAM,TS,TC,HDTS",
     "exclude_tv": True,
+    "notify_enabled": True,
+    "notify_inventory": True,
+    "notify_targets": True,
+    "notify_pool": True,
+    "notify_download": True,
+    "notify_failures": True,
 }
 
 
@@ -52,7 +60,7 @@ class EmbyLibraryDownload(_PluginBase):
     plugin_name = "联动EMBY库筛选下载"
     plugin_desc = "以 Emby 实际媒体版本为准，按站点和质量规则搜索、限量并下载资源。"
     plugin_icon = "emby.png"
-    plugin_version = "0.2.9"
+    plugin_version = "0.3.0"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "embylibrarydownload_"
@@ -134,6 +142,7 @@ class EmbyLibraryDownload(_PluginBase):
             self._route("/downloads", self._api_downloads, ["POST"], "批量提交下载"),
             self._route("/jobs", self._api_jobs, ["GET"], "下载任务"),
             self._route("/jobs/{job_id}/cancel", self._api_cancel_job, ["POST"], "取消未提交任务"),
+            self._route("/notifications/test", self._api_test_notification, ["POST"], "发送测试通知"),
         ]
 
     @staticmethod
@@ -214,7 +223,7 @@ class EmbyLibraryDownload(_PluginBase):
             target = self._require_store().save_target(payload)
             task_name = f"target-pool:{target['id']}"
             task = self._start_task(
-                task_name, self._require_service().process_target_from_pool, target["id"]
+                task_name, self._process_target_from_pool, target["id"]
             )
             target["pool_task"] = task_name if task.get("success") else None
             return self._ok(target, "目标已新增，正在匹配已扫描种子池")
@@ -267,27 +276,104 @@ class EmbyLibraryDownload(_PluginBase):
         success, message = self._require_store().cancel_job(job_id)
         return self._ok(None, "任务已取消") if success else self._error(message)
 
+    def _api_test_notification(self) -> dict:
+        summary = build_test_summary(self._now())
+        self.post_message(
+            mtype=NotificationType.Plugin,
+            title=summary["title"],
+            text=summary["text"],
+        )
+        return self._ok(None, "测试通知已发送")
+
     def _sync_inventory(self) -> dict:
-        return self._require_service().sync_inventory()
+        return self._run_notified("inventory", self._require_service().sync_inventory)
 
     def _search_targets(
         self, target_ids: Optional[List[int]] = None, allow_auto_download: bool = True
     ) -> dict:
-        return self._require_service().search_targets(target_ids, allow_auto_download)
+        return self._run_notified(
+            "targets", self._require_service().search_targets, target_ids, allow_auto_download
+        )
 
     def _refresh_pool(self) -> dict:
-        return self._require_service().refresh_pool(lambda value: self._set_task_progress("pool", value))
+        return self._run_notified(
+            "pool",
+            self._require_service().refresh_pool,
+            lambda value: self._set_task_progress("pool", value),
+        )
 
     def _auto_download_pool(self) -> dict:
-        return self._require_service().download_from_pool()
+        return self._run_notified("auto-download", self._require_service().download_from_pool)
+
+    def _process_target_from_pool(self, target_id: int) -> dict:
+        return self._run_notified(
+            f"target-pool:{target_id}",
+            self._require_service().process_target_from_pool,
+            target_id,
+        )
 
     def _dispatch_downloads(self, candidate_keys: List[str]) -> dict:
+        return self._run_notified("downloads", self._dispatch_downloads_result, candidate_keys)
+
+    def _dispatch_downloads_result(self, candidate_keys: List[str]) -> dict:
         results = self._require_service().dispatch(candidate_keys, automatic=False)
         return {
             "submitted": sum(1 for item in results if item.get("success")),
             "failed": sum(1 for item in results if not item.get("success")),
             "results": results,
         }
+
+    def _run_notified(self, task_name: str, func, *args) -> dict:
+        try:
+            result = func(*args)
+        except Exception:
+            self._safe_send_task_summary(task_name, "failed", None)
+            raise
+        self._safe_send_task_summary(task_name, "success", result)
+        return result
+
+    def _safe_send_task_summary(
+        self, task_name: str, status: str, result: Optional[Mapping[str, Any]]
+    ) -> None:
+        try:
+            self._send_task_summary(task_name, status, result)
+        except Exception as error:
+            logger.warning(f"[联动EMBY库筛选下载] 汇总通知生成失败：{error}")
+
+    def _send_task_summary(
+        self, task_name: str, status: str, result: Optional[Mapping[str, Any]]
+    ) -> None:
+        if not self._config.get("notify_enabled"):
+            return
+        target = None
+        if task_name.startswith("target-pool:"):
+            try:
+                target_id = int(task_name.split(":", 1)[1])
+                target = next((
+                    item for item in self._require_store().list_targets(with_inventory=True)
+                    if item.get("id") == target_id
+                ), None)
+            except (TypeError, ValueError):
+                target = None
+        progress = deepcopy(self._tasks.get(task_name, {}).get("progress") or {})
+        summary = build_task_summary(
+            task_name,
+            status,
+            result,
+            target=target,
+            progress=progress,
+            finished_at=self._now(),
+        )
+        if not summary or not self._config.get(summary["config_key"]):
+            return
+        try:
+            self.post_message(
+                mtype=NotificationType.Plugin,
+                title=summary["title"],
+                text=summary["text"],
+            )
+        except Exception as error:
+            logger.warning(f"[联动EMBY库筛选下载] 汇总通知发送失败：{error}")
 
     def _require_store(self) -> PluginStore:
         if not self._store:
@@ -339,6 +425,11 @@ class EmbyLibraryDownload(_PluginBase):
         result["max_versions"] = max(1, min(3, cls._to_int(result.get("max_versions"), 3)))
         result["auto_batch_limit"] = max(1, min(50, cls._to_int(result.get("auto_batch_limit"), 5)))
         result["exclude_tv"] = cls._to_bool(result.get("exclude_tv"), True)
+        for key in (
+            "notify_enabled", "notify_inventory", "notify_targets",
+            "notify_pool", "notify_download", "notify_failures",
+        ):
+            result[key] = cls._to_bool(result.get(key), True)
         result.pop("browse_pages", None)
         result.pop("excluded_tv_titles", None)
         for key in ("sites", "emby_servers", "quality_types", "effects", "resolutions", "video_codecs"):

@@ -35,6 +35,7 @@ const targetForm = reactive(emptyTarget())
 const recommendationDialog = ref(false)
 const recommendationLoading = ref(false)
 const recommendationImporting = ref(false)
+const notificationTesting = ref(false)
 const recommendationSources = ref([])
 const recommendation = reactive({ items: [], source: 'recommend/tmdb_movies', page: 1, canNext: false })
 let pollTimer = null
@@ -479,6 +480,16 @@ async function saveSettings() {
   }
 }
 
+async function testNotification() {
+  notificationTesting.value = true
+  try {
+    await call('post', '/notifications/test', {})
+    toast?.success?.('测试通知已发送，请检查 MoviePilot 通知渠道')
+  } finally {
+    notificationTesting.value = false
+  }
+}
+
 async function runPoolOnce() {
   if (!await saveSettings()) return
   await runTask('/pool/refresh', '手动任务已开始')
@@ -755,58 +766,105 @@ onBeforeUnmount(() => {
 
       <VWindowItem value="settings">
         <section aria-labelledby="settings-title">
-          <div class="section-heading"><div><h2 id="settings-title">规则与自动化</h2><p>自动下载默认关闭；保存后插件与定时任务会重新加载。</p></div><VBtn class="action-btn" color="primary" prepend-icon="mdi-content-save" :loading="loading" @click="saveSettings">保存设置</VBtn></div>
+          <div class="settings-hero">
+            <div class="settings-hero-copy">
+              <div class="settings-hero-icon" aria-hidden="true"><VIcon icon="mdi-tune-variant" size="30" /></div>
+              <div><span class="eyebrow">CONTROL CENTER</span><h2 id="settings-title">规则与自动化</h2><p>按工作流分组管理库存、筛选、通知与定时任务，保存后插件会自动重新加载。</p></div>
+            </div>
+            <div class="settings-hero-actions">
+              <VChip :color="bootstrap.config.enabled ? 'success' : 'default'" :prepend-icon="bootstrap.config.enabled ? 'mdi-check-circle-outline' : 'mdi-pause-circle-outline'" variant="tonal">{{ bootstrap.config.enabled ? '插件运行中' : '插件未启用' }}</VChip>
+              <VChip :color="bootstrap.config.notify_enabled ? 'primary' : 'default'" prepend-icon="mdi-bell-outline" variant="tonal">{{ bootstrap.config.notify_enabled ? '汇总通知已开启' : '汇总通知已关闭' }}</VChip>
+              <VBtn class="action-btn" color="primary" prepend-icon="mdi-content-save" :loading="loading" @click="saveSettings">保存设置</VBtn>
+            </div>
+          </div>
           <VForm @submit.prevent="saveSettings">
-            <VCard variant="outlined" class="settings-card"><VCardTitle>基础与安全边界</VCardTitle><VCardText class="settings-grid">
-              <VSwitch v-model="bootstrap.config.enabled" label="启用插件" color="primary" hide-details />
-              <VSwitch v-model="bootstrap.config.auto_download" label="允许自动下载" color="primary" hide-details />
-              <VSwitch v-model="bootstrap.config.pool_auto_download" label="允许全站种子池自动下载" color="primary" hide-details />
-              <VSwitch v-model="bootstrap.config.allow_same_slot" label="允许相同质量槽位" color="primary" hide-details />
-              <VSelect v-model="bootstrap.config.max_versions" label="每个影片/每集最多版本" :items="[1,2,3]" />
-              <VTextField v-model.number="bootstrap.config.auto_batch_limit" type="number" min="1" max="50" label="每次自动下载数量" hint="扫描完成和自动下载 Cron 均使用此数量；跳过不合格候选并补位，范围 1–50" persistent-hint />
-              <VSelect v-model="bootstrap.config.sites" label="搜索站点（种子池仅使用 UBits）" :items="siteItems" item-title="name" item-value="id" multiple chips closable-chips />
-              <VSelect v-model="bootstrap.config.emby_servers" label="Emby 服务" :items="serverItems" multiple chips closable-chips />
-              <VTextField v-model="bootstrap.config.movie_save_path" label="电影下载保存路径" hint="留空使用 MoviePilot 默认目录；支持 storage:/path" persistent-hint />
-              <VTextField v-model="bootstrap.config.tv_save_path" label="电视剧下载保存路径" hint="留空使用 MoviePilot 默认目录；支持 storage:/path" persistent-hint />
-            </VCardText></VCard>
+            <VCard variant="outlined" class="settings-card settings-card--primary">
+              <div class="settings-card-header"><div class="settings-card-icon"><VIcon icon="mdi-shield-check-outline" /></div><div><h3>基础与安全边界</h3><p>先确定自动化权限和版本上限，再配置站点、Emby 服务及保存位置。</p></div></div>
+              <VCardText>
+                <div class="settings-toggle-grid mb-5">
+                  <div class="setting-toggle"><VIcon icon="mdi-power" /><VSwitch v-model="bootstrap.config.enabled" label="启用插件" color="primary" hide-details /></div>
+                  <div class="setting-toggle"><VIcon icon="mdi-download-circle-outline" /><VSwitch v-model="bootstrap.config.auto_download" label="允许自动下载" color="primary" hide-details /></div>
+                  <div class="setting-toggle"><VIcon icon="mdi-database-arrow-down-outline" /><VSwitch v-model="bootstrap.config.pool_auto_download" label="允许种子池自动下载" color="primary" hide-details /></div>
+                  <div class="setting-toggle"><VIcon icon="mdi-layers-triple-outline" /><VSwitch v-model="bootstrap.config.allow_same_slot" label="允许相同质量槽位" color="primary" hide-details /></div>
+                </div>
+                <div class="settings-grid">
+                  <VSelect v-model="bootstrap.config.max_versions" label="每个影片/每集最多版本" :items="[1,2,3]" />
+                  <VTextField v-model.number="bootstrap.config.auto_batch_limit" type="number" min="1" max="50" label="每次自动下载数量" hint="扫描完成和自动下载 Cron 均使用此数量；范围 1–50" persistent-hint />
+                  <VSelect v-model="bootstrap.config.sites" label="搜索站点（种子池仅使用 UBits）" :items="siteItems" item-title="name" item-value="id" multiple chips closable-chips />
+                  <VSelect v-model="bootstrap.config.emby_servers" label="Emby 服务" :items="serverItems" multiple chips closable-chips />
+                  <VTextField v-model="bootstrap.config.movie_save_path" label="电影下载保存路径" hint="留空使用 MoviePilot 默认目录；支持 storage:/path" persistent-hint />
+                  <VTextField v-model="bootstrap.config.tv_save_path" label="电视剧下载保存路径" hint="留空使用 MoviePilot 默认目录；支持 storage:/path" persistent-hint />
+                </div>
+              </VCardText>
+            </VCard>
 
-            <VCard variant="outlined" class="settings-card"><VCardTitle>质量保存路径</VCardTitle><VCardText>
-              <p class="field-help">优先级：目标专用路径 &gt; 质量路径 &gt; 电影/电视剧默认路径。留空即继续使用后一级。</p>
+            <VCard variant="outlined" class="settings-card">
+              <div class="settings-card-header"><div class="settings-card-icon"><VIcon icon="mdi-folder-cog-outline" /></div><div><h3>质量保存路径</h3><p>为不同质量类型分配目录，未填写时自动回退到媒体类型默认路径。</p></div></div>
+              <VCardText>
+              <p class="field-help">路径优先级：目标专用路径 &gt; 质量路径 &gt; 电影/电视剧默认路径。</p>
               <div class="settings-grid">
                 <VTextField v-for="item in qualityTypeItems" :key="item.value" v-model="bootstrap.config.quality_save_paths[item.value]" :label="`${item.title} 保存路径`" placeholder="storage:/path" />
               </div>
             </VCardText></VCard>
 
-            <VCard variant="outlined" class="settings-card"><VCardTitle>Emby 媒体库</VCardTitle><VCardText><p class="field-help">每个服务留空表示同步全部媒体库。</p><div class="settings-grid"><VSelect v-for="server in bootstrap.options.emby_servers" :key="server.name" :model-value="bootstrap.config.emby_libraries?.[server.name] || []" :label="`${server.name} 媒体库`" :items="server.libraries" item-title="name" item-value="id" multiple chips closable-chips @update:model-value="value => setServerLibraries(server.name, value)" /></div></VCardText></VCard>
+            <VCard variant="outlined" class="settings-card">
+              <div class="settings-card-header"><div class="settings-card-icon"><VIcon icon="mdi-server-network-outline" /></div><div><h3>Emby 媒体库</h3><p>限定需要建立本地库存的服务器和媒体库范围。</p></div></div>
+              <VCardText><p class="field-help">每个服务留空表示同步该服务的全部媒体库。</p><div class="settings-grid"><VSelect v-for="server in bootstrap.options.emby_servers" :key="server.name" :model-value="bootstrap.config.emby_libraries?.[server.name] || []" :label="`${server.name} 媒体库`" :items="server.libraries" item-title="name" item-value="id" multiple chips closable-chips @update:model-value="value => setServerLibraries(server.name, value)" /></div></VCardText>
+            </VCard>
 
-            <VCard variant="outlined" class="settings-card"><VCardTitle>质量筛选</VCardTitle><VCardText class="settings-grid">
-              <VSelect v-model="bootstrap.config.quality_types" label="质量类型（选择顺序即优先级）" :items="qualityTypeItems" multiple chips closable-chips />
-              <VSelect v-model="bootstrap.config.effects" label="动态范围（选择顺序即优先级）" :items="[{title:'Dolby Vision',value:'dv'},{title:'HDR10+',value:'hdr10plus'},{title:'HDR10',value:'hdr10'},{title:'HDR',value:'hdr'},{title:'HLG',value:'hlg'},{title:'SDR',value:'sdr'},{title:'未知',value:'unknown'}]" multiple chips closable-chips />
-              <VSelect v-model="bootstrap.config.resolutions" label="分辨率（选择顺序即优先级）" :items="['2160p','1080p','720p','unknown']" multiple chips closable-chips />
-              <VSelect v-model="bootstrap.config.video_codecs" label="视频编码（留空不限）" :items="['h265','h264','av1','unknown']" multiple chips closable-chips />
-              <VTextField v-model.number="bootstrap.config.min_bitrate_mbps" type="number" min="0" label="最低码率 Mbps" />
-              <VTextField v-model.number="bootstrap.config.max_bitrate_mbps" type="number" min="0" label="最高码率 Mbps（0 不限）" />
-              <VSelect v-model="bootstrap.config.bitrate_order" label="同质量码率排序" :items="[{title:'高到低',value:'desc'},{title:'低到高',value:'asc'},{title:'不参与排序',value:'ignore'}]" />
-              <VSwitch v-model="bootstrap.config.reject_unknown_bitrate" label="设置码率时拒绝未知码率" color="primary" hide-details />
-              <VTextField v-model="bootstrap.config.include_words" label="必须包含关键词" hint="逗号分隔，全部命中才通过" persistent-hint />
-              <VTextField v-model="bootstrap.config.exclude_words" label="排除关键词" hint="逗号分隔，任一命中即拒绝" persistent-hint />
-              <div><VSwitch v-model="bootstrap.config.exclude_tv" label="排除所有剧集（仅保留电影）" color="primary" hide-details /><p class="field-help">默认开启；候选入池和下载提交前都会再次拦截剧集。</p></div>
-            </VCardText></VCard>
+            <VCard variant="outlined" class="settings-card">
+              <div class="settings-card-header"><div class="settings-card-icon"><VIcon icon="mdi-tune-vertical-variant" /></div><div><h3>质量筛选</h3><p>多选项的排列顺序就是自动选择优先级，越靠前越优先。</p></div></div>
+              <VCardText>
+                <div class="settings-grid">
+                  <VSelect v-model="bootstrap.config.quality_types" label="质量类型（选择顺序即优先级）" :items="qualityTypeItems" multiple chips closable-chips />
+                  <VSelect v-model="bootstrap.config.effects" label="动态范围（选择顺序即优先级）" :items="[{title:'Dolby Vision',value:'dv'},{title:'HDR10+',value:'hdr10plus'},{title:'HDR10',value:'hdr10'},{title:'HDR',value:'hdr'},{title:'HLG',value:'hlg'},{title:'SDR',value:'sdr'},{title:'未知',value:'unknown'}]" multiple chips closable-chips />
+                  <VSelect v-model="bootstrap.config.resolutions" label="分辨率（选择顺序即优先级）" :items="['2160p','1080p','720p','unknown']" multiple chips closable-chips />
+                  <VSelect v-model="bootstrap.config.video_codecs" label="视频编码（留空不限）" :items="['h265','h264','av1','unknown']" multiple chips closable-chips />
+                  <VTextField v-model.number="bootstrap.config.min_bitrate_mbps" type="number" min="0" label="最低码率 Mbps" />
+                  <VTextField v-model.number="bootstrap.config.max_bitrate_mbps" type="number" min="0" label="最高码率 Mbps（0 不限）" />
+                  <VSelect v-model="bootstrap.config.bitrate_order" label="同质量码率排序" :items="[{title:'高到低',value:'desc'},{title:'低到高',value:'asc'},{title:'不参与排序',value:'ignore'}]" />
+                  <VTextField v-model="bootstrap.config.include_words" label="必须包含关键词" hint="逗号分隔，全部命中才通过" persistent-hint />
+                  <VTextField v-model="bootstrap.config.exclude_words" label="排除关键词" hint="逗号分隔，任一命中即拒绝" persistent-hint />
+                </div>
+                <div class="settings-toggle-grid mt-2">
+                  <div class="setting-toggle"><VIcon icon="mdi-speedometer-slow" /><VSwitch v-model="bootstrap.config.reject_unknown_bitrate" label="拒绝未知码率" color="primary" hide-details /></div>
+                  <div class="setting-toggle"><VIcon icon="mdi-television-off" /><VSwitch v-model="bootstrap.config.exclude_tv" label="排除所有剧集" color="primary" hide-details /></div>
+                </div>
+              </VCardText>
+            </VCard>
 
-            <VCard variant="outlined" class="settings-card"><VCardTitle>定时任务</VCardTitle><VCardText>
-              <div class="section-heading mb-4">
-                <div><strong>立即运行一轮种子池任务</strong><p class="field-help">先保存当前设置，再执行 UBits 四类全页扫描；若两个自动下载开关均已开启，扫描结束后会自动提交最多 {{ bootstrap.config.auto_batch_limit }} 个合格候选。</p></div>
-                <VBtn class="action-btn" variant="tonal" prepend-icon="mdi-play-circle-outline" :loading="loading || poolTask?.status === 'running'" :disabled="hasRunningTask || loading" @click="runPoolOnce">手动执行一次</VBtn>
-              </div>
-              <div class="settings-grid">
-                <VTextField v-model="bootstrap.config.inventory_cron" label="Emby 同步 Cron" :hint="cronPreview('inventory_cron').text" :error="cronPreview('inventory_cron').valid === false" persistent-hint />
-                <VSwitch v-model="bootstrap.config.target_scan_enabled" label="启用目标定时搜索" color="primary" hide-details />
-                <VTextField v-model="bootstrap.config.target_cron" label="目标搜索 Cron" :hint="cronPreview('target_cron').text" :error="cronPreview('target_cron').valid === false" persistent-hint />
-                <VSwitch v-model="bootstrap.config.pool_scan_enabled" label="启用全站种子池定时刷新" color="primary" hide-details />
-                <VTextField v-model="bootstrap.config.pool_cron" label="种子池刷新 Cron" :hint="cronPreview('pool_cron').text" :error="cronPreview('pool_cron').valid === false" persistent-hint />
-                <VTextField v-model="bootstrap.config.auto_download_cron" label="自动下载 Cron（可选）" :hint="cronPreview('auto_download_cron').text" :error="cronPreview('auto_download_cron').valid === false" :disabled="!bootstrap.config.auto_download || !bootstrap.config.pool_auto_download" persistent-hint />
-              </div>
-            </VCardText></VCard>
+            <VCard variant="outlined" class="settings-card settings-card--notification">
+              <div class="settings-card-header"><div class="settings-card-icon"><VIcon icon="mdi-bell-badge-outline" /></div><div><h3>汇总通知</h3><p>默认开启，通过 MoviePilot 通知渠道发送美化后的纯数据汇总。</p></div></div>
+              <VCardText>
+                <VAlert type="info" variant="tonal" icon="mdi-information-outline" class="mb-4">通知只显示统计数字，不包含影片名、种子名、路径、Cookie 或报错详情。</VAlert>
+                <div class="settings-toggle-grid notification-grid">
+                  <div class="setting-toggle setting-toggle--featured"><VIcon icon="mdi-bell-ring-outline" /><VSwitch v-model="bootstrap.config.notify_enabled" label="开启汇总通知" color="primary" hide-details /></div>
+                  <div class="setting-toggle"><VIcon icon="mdi-server-outline" /><VSwitch v-model="bootstrap.config.notify_inventory" label="库存同步汇总" color="primary" :disabled="!bootstrap.config.notify_enabled" hide-details /></div>
+                  <div class="setting-toggle"><VIcon icon="mdi-playlist-check" /><VSwitch v-model="bootstrap.config.notify_targets" label="目标清单汇总" color="primary" :disabled="!bootstrap.config.notify_enabled" hide-details /></div>
+                  <div class="setting-toggle"><VIcon icon="mdi-database-search-outline" /><VSwitch v-model="bootstrap.config.notify_pool" label="种子池扫描汇总" color="primary" :disabled="!bootstrap.config.notify_enabled" hide-details /></div>
+                  <div class="setting-toggle"><VIcon icon="mdi-download-box-outline" /><VSwitch v-model="bootstrap.config.notify_download" label="下载任务汇总" color="primary" :disabled="!bootstrap.config.notify_enabled" hide-details /></div>
+                  <div class="setting-toggle"><VIcon icon="mdi-alert-circle-outline" /><VSwitch v-model="bootstrap.config.notify_failures" label="任务异常汇总" color="primary" :disabled="!bootstrap.config.notify_enabled" hide-details /></div>
+                </div>
+                <div class="notification-actions"><div><strong>测试通知链路</strong><p class="field-help">发送一条不含业务详情的统计测试消息。</p></div><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-send-check-outline" :loading="notificationTesting" @click="testNotification">发送测试通知</VBtn></div>
+              </VCardText>
+            </VCard>
+
+            <VCard variant="outlined" class="settings-card">
+              <div class="settings-card-header"><div class="settings-card-icon"><VIcon icon="mdi-calendar-clock-outline" /></div><div><h3>定时任务</h3><p>每个 Cron 都显示可读时间，开关关闭时不会注册对应任务。</p></div></div>
+              <VCardText>
+                <div class="run-once-panel mb-5"><div><strong>立即运行一轮种子池任务</strong><p class="field-help">保存当前设置后扫描 UBits 四类全部分页；自动下载开启时最多提交 {{ bootstrap.config.auto_batch_limit }} 个候选。</p></div><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-play-circle-outline" :loading="loading || poolTask?.status === 'running'" :disabled="hasRunningTask || loading" @click="runPoolOnce">手动执行一次</VBtn></div>
+                <div class="settings-grid">
+                  <VTextField v-model="bootstrap.config.inventory_cron" label="Emby 同步 Cron" :hint="cronPreview('inventory_cron').text" :error="cronPreview('inventory_cron').valid === false" persistent-hint />
+                  <VTextField v-model="bootstrap.config.target_cron" label="目标搜索 Cron" :hint="cronPreview('target_cron').text" :error="cronPreview('target_cron').valid === false" :disabled="!bootstrap.config.target_scan_enabled" persistent-hint />
+                  <VTextField v-model="bootstrap.config.pool_cron" label="种子池刷新 Cron" :hint="cronPreview('pool_cron').text" :error="cronPreview('pool_cron').valid === false" :disabled="!bootstrap.config.pool_scan_enabled" persistent-hint />
+                  <VTextField v-model="bootstrap.config.auto_download_cron" label="自动下载 Cron（可选）" :hint="cronPreview('auto_download_cron').text" :error="cronPreview('auto_download_cron').valid === false" :disabled="!bootstrap.config.auto_download || !bootstrap.config.pool_auto_download" persistent-hint />
+                </div>
+                <div class="settings-toggle-grid mt-2">
+                  <div class="setting-toggle"><VIcon icon="mdi-target" /><VSwitch v-model="bootstrap.config.target_scan_enabled" label="启用目标定时搜索" color="primary" hide-details /></div>
+                  <div class="setting-toggle"><VIcon icon="mdi-database-sync-outline" /><VSwitch v-model="bootstrap.config.pool_scan_enabled" label="启用种子池定时刷新" color="primary" hide-details /></div>
+                </div>
+              </VCardText>
+            </VCard>
             <div class="form-actions"><VBtn type="submit" class="action-btn" color="primary" prepend-icon="mdi-content-save">保存并应用</VBtn></div>
           </VForm>
         </section>
@@ -914,8 +972,31 @@ p { color: rgb(var(--v-theme-on-surface-variant)); margin: 0; }
 .recommend-entry { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; }
 .recommend-entry span { color: rgb(var(--v-theme-on-surface-variant)); font-size: .86rem; }
 .selection-bar { min-height: 56px; padding: 6px 12px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 14px; background: rgb(var(--v-theme-surface)); }
-.settings-card { margin-bottom: 16px; }
+.settings-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 22px; margin-bottom: 20px; border: 1px solid rgba(var(--v-theme-primary), .28); border-radius: 20px; background: linear-gradient(135deg, rgba(var(--v-theme-primary), .12), rgba(var(--v-theme-surface), .96) 58%); }
+.settings-hero-copy, .settings-hero-actions, .settings-card-header, .setting-toggle, .notification-actions, .run-once-panel { display: flex; align-items: center; }
+.settings-hero-copy { gap: 16px; min-width: 0; }
+.settings-hero-copy h2 { margin-top: 4px; }
+.settings-hero-copy p { max-width: 720px; }
+.settings-hero-icon, .settings-card-icon { display: grid; flex: 0 0 auto; place-items: center; color: rgb(var(--v-theme-primary)); background: rgba(var(--v-theme-primary), .12); }
+.settings-hero-icon { width: 58px; height: 58px; border-radius: 18px; }
+.settings-hero-actions { justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
+.settings-card { margin-bottom: 18px; overflow: hidden; border-color: var(--line); box-shadow: 0 8px 28px rgba(var(--v-theme-on-surface), .035); }
+.settings-card--primary { border-color: rgba(var(--v-theme-primary), .32); }
+.settings-card--notification { border-color: rgba(var(--v-theme-info), .38); background: linear-gradient(150deg, rgba(var(--v-theme-info), .055), rgb(var(--v-theme-surface)) 48%); }
+.settings-card-header { align-items: flex-start; gap: 14px; padding: 20px 20px 0; }
+.settings-card-header h3 { margin: 0 0 4px; font-size: 1.08rem; }
+.settings-card-header p { max-width: 760px; font-size: .88rem; line-height: 1.5; }
+.settings-card-icon { width: 44px; height: 44px; border-radius: 13px; }
+.settings-card :deep(.v-card-text) { padding: 20px; }
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
+.settings-toggle-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.setting-toggle { gap: 10px; min-height: 58px; padding: 4px 12px; border: 1px solid var(--line); border-radius: 14px; background: rgba(var(--v-theme-surface-variant), .24); }
+.setting-toggle > .v-icon { flex: 0 0 auto; color: rgb(var(--v-theme-primary)); }
+.setting-toggle :deep(.v-switch) { flex: 1; min-width: 0; }
+.setting-toggle :deep(.v-selection-control) { min-height: 48px; }
+.setting-toggle--featured { grid-column: 1 / -1; border-color: rgba(var(--v-theme-primary), .35); background: rgba(var(--v-theme-primary), .08); }
+.notification-actions, .run-once-panel { justify-content: space-between; gap: 18px; padding: 16px; margin-top: 18px; border: 1px dashed rgba(var(--v-theme-primary), .36); border-radius: 14px; background: rgba(var(--v-theme-primary), .045); }
+.notification-actions .field-help, .run-once-panel .field-help { margin: 4px 0 0; }
 .field-help { margin-bottom: 16px; }
 .form-actions { display: flex; justify-content: flex-end; padding: 4px 0 20px; }
 .chip-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
@@ -923,12 +1004,21 @@ p { color: rgb(var(--v-theme-on-surface-variant)); margin: 0; }
 a { color: rgb(var(--v-theme-primary)); text-decoration: none; }
 a:hover { text-decoration: underline; }
 a:focus-visible, button:focus-visible { outline: 3px solid rgb(var(--v-theme-primary)); outline-offset: 2px; }
-@media (max-width: 1100px) { .stat-grid { grid-template-columns: repeat(3, 1fr); } .workflow-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 1100px) { .stat-grid { grid-template-columns: repeat(3, 1fr); } .workflow-grid { grid-template-columns: repeat(2, 1fr); } .settings-hero { align-items: flex-start; flex-direction: column; } .settings-hero-actions { justify-content: flex-start; } }
 @media (max-width: 700px) {
   .page-header, .section-heading, .selection-bar { flex-direction: column; align-items: stretch; }
   .button-row { flex-wrap: wrap; }
   .button-row > * { flex: 1 1 auto; }
-  .stat-grid, .target-grid, .settings-grid, .workflow-grid, .filter-row, .recommend-toolbar { grid-template-columns: 1fr; }
+  .stat-grid, .target-grid, .settings-grid, .settings-toggle-grid, .workflow-grid, .filter-row, .recommend-toolbar { grid-template-columns: 1fr; }
+  .settings-hero { padding: 18px; }
+  .settings-hero-copy { align-items: flex-start; }
+  .settings-hero-icon { width: 48px; height: 48px; border-radius: 14px; }
+  .settings-hero-actions { align-items: stretch; flex-direction: column; width: 100%; }
+  .settings-hero-actions :deep(.v-btn) { width: 100%; }
+  .settings-card-header { padding: 18px 16px 0; }
+  .settings-card :deep(.v-card-text) { padding: 16px; }
+  .setting-toggle--featured { grid-column: auto; }
+  .notification-actions, .run-once-panel { align-items: stretch; flex-direction: column; }
   .recommend-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .target-item-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .target-list-header { flex-direction: column; }
