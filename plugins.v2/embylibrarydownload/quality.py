@@ -203,6 +203,107 @@ def merge_profile(base: Mapping[str, Any], override: Optional[Mapping[str, Any]]
     return result
 
 
+def prioritize_pool_candidates(
+    candidates: Iterable[Mapping[str, Any]],
+    targets: Iterable[Mapping[str, Any]],
+    base_profile: Mapping[str, Any],
+    default_sites: Optional[Iterable[Any]] = None,
+) -> list[tuple[Mapping[str, Any], Optional[Mapping[str, Any]]]]:
+    """Move scanned pool candidates matching enabled target rules to the front."""
+
+    active_targets = [
+        target for target in targets
+        if target.get("enabled") and target.get("auto_download") and target.get("prefer_scanned_pool")
+    ]
+    preferred, regular = [], []
+    for candidate in candidates:
+        matched_target = next((
+            target for target in active_targets
+            if _pool_candidate_matches_target(
+                candidate,
+                target,
+                merge_profile(base_profile, target.get("profile")),
+                target.get("sites") or default_sites,
+            )
+        ), None)
+        (preferred if matched_target else regular).append((candidate, matched_target))
+    return preferred + regular
+
+
+def _pool_candidate_matches_target(
+    candidate: Mapping[str, Any],
+    target: Mapping[str, Any],
+    profile: Mapping[str, Any],
+    sites: Optional[Iterable[Any]],
+) -> bool:
+    if not candidate.get("eligible") or str(target.get("media_type") or "movie").lower() != "movie":
+        return False
+    site_ids = {_as_int(value) for value in sites or [] if _as_int(value)}
+    if site_ids and _as_int(candidate.get("site_id")) not in site_ids:
+        return False
+    target_year = _as_int(target.get("year"))
+    candidate_year = _as_int(candidate.get("year"))
+    if target_year and candidate_year and target_year != candidate_year:
+        return False
+
+    quality = QualityInfo(
+        quality_type=str(candidate.get("quality_type") or "unknown"),
+        effect=str(candidate.get("quality_effect") or "unknown"),
+        resolution=str(candidate.get("resolution") or "unknown"),
+        video_codec=str(candidate.get("video_codec") or "unknown"),
+        bitrate_mbps=_as_float(candidate.get("bitrate_mbps")),
+        year=candidate_year or None,
+        score=_as_int(candidate.get("quality_score")),
+        slot=str(candidate.get("quality_slot") or ""),
+    )
+    if not quality_matches(str(candidate.get("title") or ""), quality, profile)[0]:
+        return False
+
+    target_media_id = str(target.get("media_id") or "").strip()
+    candidate_media_id = _candidate_media_id(candidate, str(target.get("media_source") or "themoviedb"))
+    if target_media_id and candidate_media_id:
+        return target_media_id == candidate_media_id
+
+    target_title = _normalize_media_title(target.get("title"))
+    if not target_title:
+        return False
+    meta = candidate.get("meta") if isinstance(candidate.get("meta"), Mapping) else {}
+    media = candidate.get("media") if isinstance(candidate.get("media"), Mapping) else {}
+    candidate_titles = (
+        candidate.get("title"), candidate.get("description"),
+        meta.get("name"), meta.get("cn_name"), meta.get("en_name"), meta.get("original_name"),
+        media.get("title"), media.get("original_title"), media.get("en_title"),
+    )
+    return any(
+        f" {target_title} " in f" {_normalize_media_title(value)} "
+        for value in candidate_titles if value
+    )
+
+
+def _candidate_media_id(candidate: Mapping[str, Any], source: str) -> str:
+    source = source.strip().lower()
+    source_keys = {
+        "themoviedb": ("tmdb_id", "tmdbid"),
+        "douban": ("douban_id", "doubanid"),
+        "bangumi": ("bangumi_id", "bangumiid"),
+        "anilist": ("anilist_id", "anilistid"),
+    }
+    for data in (candidate.get("media"), candidate.get("meta")):
+        if not isinstance(data, Mapping):
+            continue
+        data_source = str(data.get("source") or data.get("media_source") or "").lower()
+        if data_source == source and data.get("media_id") not in (None, ""):
+            return str(data["media_id"])
+        for key in source_keys.get(source, ()):
+            if data.get(key) not in (None, ""):
+                return str(data[key])
+    return ""
+
+
+def _normalize_media_title(value: Any) -> str:
+    return " ".join(re.findall(r"[^\W_]+", str(value or "").casefold(), re.UNICODE))
+
+
 def profile_score(quality: QualityInfo, profile: Mapping[str, Any]) -> int:
     """Build a stable auto-selection score from the user's ordered choices."""
 

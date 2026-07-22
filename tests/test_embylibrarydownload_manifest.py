@@ -13,9 +13,9 @@ def test_manifest_matches_plugin_version_and_name():
     entry = manifest["EmbyLibraryDownload"]
 
     assert entry["name"] == "联动EMBY库筛选下载"
-    assert entry["version"] == "0.2.5"
+    assert entry["version"] == "0.2.6"
     assert entry["release"] is True
-    assert 'plugin_version = "0.2.5"' in source
+    assert 'plugin_version = "0.2.6"' in source
     assert '"auto_download_cron": ""' in source
     assert 'plugin_icon = "emby.png"' in source
 

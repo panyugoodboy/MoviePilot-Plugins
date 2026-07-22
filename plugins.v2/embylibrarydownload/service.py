@@ -22,6 +22,7 @@ from .quality import (
     classify_quality,
     is_series_title,
     merge_profile,
+    prioritize_pool_candidates,
     profile_score,
     quality_matches,
     select_save_path,
@@ -211,8 +212,16 @@ class LibraryDownloadService:
             downloads = []
             skipped = []
             attempted = 0
-            for candidate_key in self.store.pending_auto_candidate_keys():
-                result = self._dispatch_one(candidate_key, automatic=True)
+            ordered = prioritize_pool_candidates(
+                self.store.pending_auto_candidates(),
+                self.store.list_targets(),
+                self._base_profile(),
+                _ids(config.get("sites")),
+            )
+            for candidate, target in ordered:
+                result = self._dispatch_one(
+                    candidate["candidate_key"], automatic=True, target_override=target
+                )
                 attempted += 1
                 if result.get("success"):
                     downloads.append(result)
@@ -286,7 +295,12 @@ class LibraryDownloadService:
                 results.append({"candidate_key": candidate_key, "success": False, "message": str(error)})
         return results
 
-    def _dispatch_one(self, candidate_key: str, automatic: bool) -> dict:
+    def _dispatch_one(
+        self,
+        candidate_key: str,
+        automatic: bool,
+        target_override: Optional[Mapping[str, Any]] = None,
+    ) -> dict:
         if not self.store.inventory_ready():
             return {
                 "candidate_key": candidate_key,
@@ -309,7 +323,9 @@ class LibraryDownloadService:
         )
         if excluded_reason:
             return {"candidate_key": candidate_key, "success": False, "message": excluded_reason}
-        target = self.store.get_target(candidate["target_id"]) if candidate.get("target_id") else None
+        target = target_override or (
+            self.store.get_target(candidate["target_id"]) if candidate.get("target_id") else None
+        )
         media_keys = self._media_keys(media, meta, target)
         if not media_keys:
             return {"candidate_key": candidate_key, "success": False, "message": "无法建立媒体版本键"}
@@ -331,6 +347,7 @@ class LibraryDownloadService:
             save_path=save_path,
             automatic=automatic,
             allow_same_slot=bool(config.get("allow_same_slot")),
+            target_id=target.get("id") if target else None,
         )
         if not job_id:
             return {"candidate_key": candidate_key, "success": False, "message": reason}

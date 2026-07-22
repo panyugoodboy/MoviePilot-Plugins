@@ -107,6 +107,7 @@ class PluginStore:
                     profile_json TEXT NOT NULL DEFAULT '{}',
                     save_path TEXT,
                     auto_download INTEGER NOT NULL DEFAULT 0,
+                    prefer_scanned_pool INTEGER NOT NULL DEFAULT 0,
                     enabled INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -184,6 +185,9 @@ class PluginStore:
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(inventory_versions)")}
             if "date_created" not in columns:
                 conn.execute("ALTER TABLE inventory_versions ADD COLUMN date_created TEXT")
+            target_columns = {row["name"] for row in conn.execute("PRAGMA table_info(targets)")}
+            if "prefer_scanned_pool" not in target_columns:
+                conn.execute("ALTER TABLE targets ADD COLUMN prefer_scanned_pool INTEGER NOT NULL DEFAULT 0")
 
     def replace_inventory(self, server_name: str, rows: list[Mapping[str, Any]]) -> int:
         now = utcnow()
@@ -308,6 +312,7 @@ class PluginStore:
             "profile_json": dumps(payload.get("profile") or {}),
             "save_path": _none(payload.get("save_path")),
             "auto_download": int(bool(payload.get("auto_download"))),
+            "prefer_scanned_pool": int(bool(payload.get("prefer_scanned_pool"))),
             "enabled": int(payload.get("enabled", True) is not False),
             "updated_at": now,
         }
@@ -322,7 +327,8 @@ class PluginStore:
                         media_id=:media_id, title=:title, year=:year, seasons_json=:seasons_json,
                         desired_versions=:desired_versions, sites_json=:sites_json,
                         profile_json=:profile_json, save_path=:save_path,
-                        auto_download=:auto_download, enabled=:enabled, updated_at=:updated_at
+                        auto_download=:auto_download, prefer_scanned_pool=:prefer_scanned_pool,
+                        enabled=:enabled, updated_at=:updated_at
                     WHERE id=:id
                     """,
                     values,
@@ -336,11 +342,11 @@ class PluginStore:
                     INSERT INTO targets (
                         media_type, media_source, media_id, title, year, seasons_json,
                         desired_versions, sites_json, profile_json, save_path,
-                        auto_download, enabled, created_at, updated_at
+                        auto_download, prefer_scanned_pool, enabled, created_at, updated_at
                     ) VALUES (
                         :media_type, :media_source, :media_id, :title, :year, :seasons_json,
                         :desired_versions, :sites_json, :profile_json, :save_path,
-                        :auto_download, :enabled, :created_at, :updated_at
+                        :auto_download, :prefer_scanned_pool, :enabled, :created_at, :updated_at
                     )
                     """,
                     values,
@@ -447,11 +453,11 @@ class PluginStore:
             "quality_counts": quality_counts,
         }
 
-    def pending_auto_candidate_keys(self) -> list[str]:
+    def pending_auto_candidates(self) -> list[dict]:
         with self.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT candidate_key FROM candidates AS candidate
+                SELECT candidate.* FROM candidates AS candidate
                 WHERE scope='pool' AND eligible=1
                   AND NOT EXISTS (
                     SELECT 1 FROM download_jobs AS job
@@ -463,7 +469,10 @@ class PluginStore:
                 """,
                 DUPLICATE_JOB_STATES,
             ).fetchall()
-        return [str(row["candidate_key"]) for row in rows]
+        return [_decode(row) for row in rows]
+
+    def pending_auto_candidate_keys(self) -> list[str]:
+        return [str(row["candidate_key"]) for row in self.pending_auto_candidates()]
 
     def reserve_download(
         self,
@@ -473,6 +482,7 @@ class PluginStore:
         save_path: Optional[str],
         automatic: bool,
         allow_same_slot: bool = False,
+        target_id: Optional[int] = None,
     ) -> tuple[Optional[int], str]:
         if not media_keys:
             return None, "未识别到媒体版本键"
@@ -529,7 +539,7 @@ class PluginStore:
                 (
                     candidate_key,
                     candidate["torrent_key"],
-                    candidate["target_id"],
+                    int(target_id) if target_id is not None else candidate["target_id"],
                     candidate["title"],
                     candidate["site_name"],
                     dumps(media_keys),
@@ -625,7 +635,7 @@ def _decode(row: sqlite3.Row) -> dict:
         if source in result:
             default = [] if source.endswith("keys_json") or source in {"sites_json", "seasons_json"} else {}
             result[target] = _loads(result.pop(source), default)
-    for key in ("enabled", "auto_download", "eligible", "automatic"):
+    for key in ("enabled", "auto_download", "prefer_scanned_pool", "eligible", "automatic"):
         if key in result:
             result[key] = bool(result[key])
     return result

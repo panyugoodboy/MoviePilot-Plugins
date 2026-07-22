@@ -21,6 +21,7 @@ apply_source_quality_type = quality_module.apply_source_quality_type
 is_series_title = quality_module.is_series_title
 tv_exclusion_reason = quality_module.tv_exclusion_reason
 select_save_path = quality_module.select_save_path
+prioritize_pool_candidates = quality_module.prioritize_pool_candidates
 
 
 def test_classifies_diy_dolby_vision_and_bitrate():
@@ -119,3 +120,47 @@ def test_save_path_precedence_is_target_then_quality_then_media_type():
     assert select_save_path(config, "remux", "tv") == "storage:/remux"
     assert select_save_path(config, "webdl", "tv") == "storage:/tv"
     assert select_save_path(config, "webdl", "movie") == "storage:/movies"
+
+
+def test_matching_scanned_target_is_moved_before_newer_regular_candidate():
+    base_profile = {"quality_types": ["remux", "webdl"], "resolutions": ["2160p"]}
+    target = {
+        "id": 1, "enabled": True, "auto_download": True, "prefer_scanned_pool": True,
+        "media_type": "movie", "title": "Dune Part Two", "year": 2024,
+        "sites": [7], "profile": {"quality_types": ["remux"]},
+    }
+    regular = {
+        "candidate_key": "newer", "eligible": True, "title": "Other.Movie.2026.2160p.WEB-DL",
+        "year": 2026, "site_id": 7, "quality_type": "webdl", "quality_effect": "hdr",
+        "resolution": "2160p", "video_codec": "h265", "bitrate_mbps": 20,
+    }
+    matched = {
+        "candidate_key": "target", "eligible": True, "title": "Dune.Part.Two.2024.2160p.Remux",
+        "year": 2024, "site_id": 7, "quality_type": "remux", "quality_effect": "dv",
+        "resolution": "2160p", "video_codec": "h265", "bitrate_mbps": 60,
+    }
+
+    ordered = prioritize_pool_candidates([regular, matched], [target], base_profile, [7])
+
+    assert [candidate["candidate_key"] for candidate, _ in ordered] == ["target", "newer"]
+    assert ordered[0][1]["id"] == 1
+    assert ordered[1][1] is None
+
+    target["prefer_scanned_pool"] = False
+    unchanged = prioritize_pool_candidates([regular, matched], [target], base_profile, [7])
+    assert [candidate["candidate_key"] for candidate, _ in unchanged] == ["newer", "target"]
+
+
+def test_scanned_target_priority_requires_target_site_year_and_filter_match():
+    target = {
+        "id": 1, "enabled": True, "auto_download": True, "prefer_scanned_pool": True,
+        "media_type": "movie", "title": "Dune Part Two", "year": 2024,
+        "sites": [7], "profile": {"quality_types": ["remux"]},
+    }
+    candidate = {
+        "candidate_key": "wrong", "eligible": True, "title": "Dune.Part.Two.2025.2160p.WEB-DL",
+        "year": 2025, "site_id": 8, "quality_type": "webdl", "quality_effect": "hdr",
+        "resolution": "2160p", "video_codec": "h265", "bitrate_mbps": 20,
+    }
+
+    assert prioritize_pool_candidates([candidate], [target], {}, [7])[0][1] is None

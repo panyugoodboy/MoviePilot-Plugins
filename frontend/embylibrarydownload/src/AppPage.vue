@@ -222,7 +222,7 @@ function emptyTarget() {
   return {
     media_type: 'movie', media_source: 'themoviedb', media_id: '', title: '', year: null,
     seasons_text: '', desired_versions: 3, sites: [], profile: {}, save_path: '',
-    auto_download: false, enabled: true,
+    auto_download: false, prefer_scanned_pool: false, enabled: true,
   }
 }
 
@@ -475,7 +475,7 @@ onBeforeUnmount(() => {
             <VCard v-for="target in targets" :key="target.id" variant="outlined" class="target-card">
               <VCardText>
                 <div class="target-top"><div><span class="eyebrow">{{ target.media_type === 'tv' ? 'SERIES' : 'MOVIE' }}</span><h3>{{ target.title }} <small>{{ target.year || '' }}</small></h3></div><VChip :color="target.enabled ? 'success' : 'default'" size="small">{{ target.enabled ? '启用' : '停用' }}</VChip></div>
-                <dl><div><dt>媒体标识</dt><dd>{{ target.media_source }}:{{ target.media_id || '标题识别' }}</dd></div><div><dt>版本目标</dt><dd>{{ target.desired_versions }} / 最大 3</dd></div><div><dt>自动下载</dt><dd>{{ target.auto_download ? '是' : '否' }}</dd></div></dl>
+                <dl><div><dt>媒体标识</dt><dd>{{ target.media_source }}:{{ target.media_id || '标题识别' }}</dd></div><div><dt>版本目标</dt><dd>{{ target.desired_versions }} / 最大 3</dd></div><div><dt>自动下载</dt><dd>{{ target.auto_download ? '是' : '否' }}</dd></div><div><dt>种子池优先</dt><dd>{{ target.prefer_scanned_pool ? '是' : '否' }}</dd></div></dl>
                 <div class="button-row mt-4"><VBtn variant="tonal" size="small" @click="searchTarget(target)">搜索</VBtn><VBtn variant="text" size="small" @click="showTargetCandidates(target)">候选</VBtn><VBtn variant="text" size="small" @click="openTarget(target)">编辑</VBtn><VBtn variant="text" color="error" size="small" @click="deleteTarget(target)">删除</VBtn></div>
               </VCardText>
             </VCard>
@@ -622,6 +622,7 @@ onBeforeUnmount(() => {
         <VSelect v-model="targetForm.sites" label="目标站点（留空使用全局）" :items="siteItems" item-title="name" item-value="id" multiple chips />
         <VTextField v-model="targetForm.save_path" label="专用保存路径（可选）" />
         <VSwitch v-model="targetForm.auto_download" label="允许此目标自动下载" color="primary" hide-details />
+        <div><VSwitch v-model="targetForm.prefer_scanned_pool" label="优先下载已扫描种子池的匹配项" color="primary" :disabled="!targetForm.auto_download" hide-details /><p class="field-help">按目标标题、年份、站点和质量筛选匹配；自动下载时置于普通种子之前，并使用本目标的版本数与保存路径。</p></div>
         <VSwitch v-model="targetForm.enabled" label="启用目标" color="primary" hide-details />
       </div></VForm></VCardText><VCardActions><VSpacer /><VBtn class="action-btn" variant="text" @click="targetDialog=false">取消</VBtn><VBtn class="action-btn" color="primary" type="submit" form="target-form">保存目标</VBtn></VCardActions></VCard>
     </VDialog>

@@ -156,6 +156,32 @@ def test_pending_auto_candidates_exclude_torrents_already_added_to_downloads(tmp
     assert store.pending_auto_candidate_keys() == ["next"]
 
 
+def test_target_scanned_pool_preference_is_saved_and_defaults_off(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    target = store.save_target({"title": "Movie", "auto_download": True})
+    assert target["prefer_scanned_pool"] is False
+
+    target = store.save_target(
+        {"title": "Movie", "auto_download": True, "prefer_scanned_pool": True},
+        target["id"],
+    )
+    assert target["prefer_scanned_pool"] is True
+
+
+def test_pool_reservation_records_matched_target_override(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    target = store.save_target({"title": "Movie", "prefer_scanned_pool": True})
+    store.replace_candidates("pool", [candidate("pool-target")])
+
+    job_id, reason = store.reserve_download(
+        "pool-target", ["movie:themoviedb:70"], 3, "/movies", True,
+        target_id=target["id"],
+    )
+
+    assert job_id and not reason
+    assert store.list_jobs()["items"][0]["target_id"] == target["id"]
+
+
 def test_tv_season_cap_counts_episode_versions(tmp_path):
     store = PluginStore(tmp_path / "state.db")
     episode_key = "tv:themoviedb:20:S01E01"
@@ -280,3 +306,16 @@ def test_existing_inventory_database_adds_date_created_column(tmp_path):
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(inventory_versions)")}
 
     assert "date_created" in columns
+
+
+def test_existing_target_database_adds_scanned_pool_preference_column(tmp_path):
+    path = tmp_path / "state.db"
+    store = PluginStore(path)
+    with store.connect() as conn:
+        conn.execute("ALTER TABLE targets DROP COLUMN prefer_scanned_pool")
+
+    migrated = PluginStore(path)
+    with migrated.connect() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(targets)")}
+
+    assert "prefer_scanned_pool" in columns
