@@ -250,3 +250,33 @@ def test_inventory_readiness_is_recorded_even_for_empty_library(tmp_path):
 
     assert store.inventory_ready() is True
     assert store.stats()["latest_inventory"]
+
+
+def test_inventory_defaults_to_newest_emby_date_created(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    media_key = "movie:themoviedb:60"
+    older = inventory_row("older", media_key)
+    newer = inventory_row("newer", media_key)
+    unknown = inventory_row("unknown", media_key)
+    older["date_created"] = "2025-01-01T08:00:00.0000000Z"
+    newer["date_created"] = "2026-06-01T08:00:00.0000000Z"
+    unknown["date_created"] = None
+
+    store.replace_inventory("Emby", [older, unknown, newer])
+
+    page = store.list_inventory()
+    assert [item["version_key"] for item in page["items"]] == ["newer", "older", "unknown"]
+    assert page["items"][0]["date_created"] == newer["date_created"]
+
+
+def test_existing_inventory_database_adds_date_created_column(tmp_path):
+    path = tmp_path / "state.db"
+    store = PluginStore(path)
+    with store.connect() as conn:
+        conn.execute("ALTER TABLE inventory_versions DROP COLUMN date_created")
+
+    migrated = PluginStore(path)
+    with migrated.connect() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(inventory_versions)")}
+
+    assert "date_created" in columns

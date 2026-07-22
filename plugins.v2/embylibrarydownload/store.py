@@ -86,6 +86,7 @@ class PluginStore:
                     bitrate_mbps REAL DEFAULT 0,
                     size_bytes INTEGER DEFAULT 0,
                     quality_slot TEXT,
+                    date_created TEXT,
                     updated_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS ix_inventory_media_key
@@ -180,6 +181,9 @@ class PluginStore:
                 );
                 """
             )
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(inventory_versions)")}
+            if "date_created" not in columns:
+                conn.execute("ALTER TABLE inventory_versions ADD COLUMN date_created TEXT")
 
     def replace_inventory(self, server_name: str, rows: list[Mapping[str, Any]]) -> int:
         now = utcnow()
@@ -187,6 +191,7 @@ class PluginStore:
             conn.execute("DELETE FROM inventory_versions WHERE server_name=?", (server_name,))
             for row in rows:
                 values = dict(row)
+                values.setdefault("date_created", None)
                 values.setdefault("updated_at", now)
                 conn.execute(
                     """
@@ -194,12 +199,12 @@ class PluginStore:
                         version_key, media_key, server_name, library_id, item_id, media_source_id,
                         item_type, title, original_title, year, season, episode, path, tmdb_id,
                         imdb_id, tvdb_id, quality_type, quality_effect, resolution, video_codec,
-                        audio_codec, bitrate_mbps, size_bytes, quality_slot, updated_at
+                        audio_codec, bitrate_mbps, size_bytes, quality_slot, date_created, updated_at
                     ) VALUES (
                         :version_key, :media_key, :server_name, :library_id, :item_id, :media_source_id,
                         :item_type, :title, :original_title, :year, :season, :episode, :path, :tmdb_id,
                         :imdb_id, :tvdb_id, :quality_type, :quality_effect, :resolution, :video_codec,
-                        :audio_codec, :bitrate_mbps, :size_bytes, :quality_slot, :updated_at
+                        :audio_codec, :bitrate_mbps, :size_bytes, :quality_slot, :date_created, :updated_at
                     )
                     """,
                     values,
@@ -249,7 +254,8 @@ class PluginStore:
             total = conn.execute(f"SELECT COUNT(*) FROM inventory_versions{where}", params).fetchone()[0]
             rows = conn.execute(
                 f"SELECT * FROM inventory_versions{where} "
-                "ORDER BY year DESC, title, season, episode, bitrate_mbps DESC "
+                "ORDER BY (date_created IS NULL OR date_created=''), date_created DESC, "
+                "title, season, episode, bitrate_mbps DESC "
                 "LIMIT ? OFFSET ?",
                 [*params, page_size, (page - 1) * page_size],
             ).fetchall()

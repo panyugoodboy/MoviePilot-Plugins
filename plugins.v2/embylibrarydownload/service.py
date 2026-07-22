@@ -608,6 +608,7 @@ class LibraryDownloadService:
                     "bitrate_mbps": quality.bitrate_mbps,
                     "size_bytes": _int(source.get("Size")),
                     "quality_slot": quality.slot,
+                    "date_created": item.get("DateCreated"),
                 })
         return rows
 

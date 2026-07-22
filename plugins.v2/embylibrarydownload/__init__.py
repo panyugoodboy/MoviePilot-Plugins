@@ -52,7 +52,7 @@ class EmbyLibraryDownload(_PluginBase):
     plugin_name = "联动EMBY库筛选下载"
     plugin_desc = "以 Emby 实际媒体版本为准，按站点和质量规则搜索、限量并下载资源。"
     plugin_icon = "emby.png"
-    plugin_version = "0.2.4"
+    plugin_version = "0.2.5"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "embylibrarydownload_"

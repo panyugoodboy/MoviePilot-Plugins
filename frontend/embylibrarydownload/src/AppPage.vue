@@ -60,6 +60,7 @@ const allPageSelected = computed(() => pageCandidateKeys.value.length > 0 && pag
 const inventoryHeaders = [
   { title: '年份', key: 'year', width: 80 },
   { title: '媒体', key: 'title', minWidth: 220 },
+  { title: '入库时间', key: 'date_created', width: 170, sortable: false },
   { title: '季集', key: 'episode_label', width: 110, sortable: false },
   { title: '版本', key: 'quality_label', minWidth: 190, sortable: false },
   { title: '码率', key: 'bitrate_mbps', width: 100 },
@@ -319,6 +320,14 @@ function formatBytes(value) {
   return `${(bytes / 1024 ** index).toFixed(index >= 3 ? 1 : 0)} ${units[index]}`
 }
 
+function formatDateTime(value) {
+  if (!value) return '未知'
+  const date = new Date(String(value).replace(/(\.\d{3})\d+/, '$1'))
+  if (Number.isNaN(date.getTime())) return String(value)
+  const pad = number => String(number).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 function safeUrl(value) {
   try {
     const url = new URL(value)
@@ -428,7 +437,7 @@ onBeforeUnmount(() => {
       <VWindowItem value="inventory">
         <section aria-labelledby="inventory-title">
           <div class="section-heading">
-            <div><h2 id="inventory-title">EMBY 版本库存</h2><p>每个 MediaSource 记为一个版本，电视剧精确到季集。</p></div>
+            <div><h2 id="inventory-title">EMBY 版本库存</h2><p>每个 MediaSource 记为一个版本，默认按 Emby 入库时间从新到旧排列。</p></div>
             <VBtn class="action-btn" color="primary" prepend-icon="mdi-database-sync" @click="runTask('/inventory/sync', 'Emby 同步已开始')">立即同步</VBtn>
           </div>
           <div class="filter-row">
@@ -438,6 +447,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="desktop-table">
             <VDataTableServer :headers="inventoryHeaders" :items="inventory.items" :items-length="inventory.total" :items-per-page="50" :page="inventory.page" fixed-header hover @update:page="value => { inventory.page = value; loadInventory() }">
+              <template #item.date_created="{ item }">{{ formatDateTime(item.date_created) }}</template>
               <template #item.episode_label="{ item }">{{ episodeLabel(item) }}</template>
               <template #item.quality_label="{ item }"><VChip size="small" variant="tonal">{{ qualityLabel(item) }}</VChip></template>
               <template #item.bitrate_mbps="{ item }">{{ item.bitrate_mbps ? `${item.bitrate_mbps} Mbps` : '未知' }}</template>
@@ -447,7 +457,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="mobile-list">
             <VCard v-for="item in inventory.items" :key="item.version_key" variant="outlined" class="mobile-card">
-              <VCardText><div class="mobile-title">{{ item.title }} <span>{{ item.year || '年份未知' }}</span></div><VChip size="small">{{ episodeLabel(item) }}</VChip><p>{{ qualityLabel(item) }} · {{ item.bitrate_mbps || '未知' }} Mbps</p><small>{{ item.path }}</small></VCardText>
+              <VCardText><div class="mobile-title">{{ item.title }} <span>{{ item.year || '年份未知' }}</span></div><VChip size="small">{{ episodeLabel(item) }}</VChip><p>{{ qualityLabel(item) }} · {{ item.bitrate_mbps || '未知' }} Mbps</p><small>入库时间：{{ formatDateTime(item.date_created) }}</small><small>{{ item.path }}</small></VCardText>
             </VCard>
             <VPagination v-model="inventory.page" :length="Math.max(1, Math.ceil(inventory.total / 50))" @update:model-value="loadInventory" />
           </div>
