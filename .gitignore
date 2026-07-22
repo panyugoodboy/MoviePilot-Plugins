@@ -161,3 +161,7 @@ cython_debug/
 
 .idea/
 .vscode/
+node_modules/
+!plugins.v2/embylibrarydownload/dist/
+!plugins.v2/embylibrarydownload/dist/assets/
+!plugins.v2/embylibrarydownload/dist/assets/**
