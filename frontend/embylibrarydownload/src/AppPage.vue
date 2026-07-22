@@ -14,7 +14,7 @@ const tab = ref('overview')
 const loading = ref(false)
 const actionError = ref('')
 const bootstrap = reactive({
-  config: { quality_save_paths: {}, exclude_tv: true },
+  config: { quality_save_paths: {}, exclude_tv: true, proxy_enabled: true },
   options: { sites: [], emby_servers: [] },
   stats: {},
   tasks: {},
@@ -786,7 +786,9 @@ onBeforeUnmount(() => {
                   <div class="setting-toggle"><VIcon icon="mdi-download-circle-outline" /><VSwitch v-model="bootstrap.config.auto_download" label="允许自动下载" color="primary" hide-details /></div>
                   <div class="setting-toggle"><VIcon icon="mdi-database-arrow-down-outline" /><VSwitch v-model="bootstrap.config.pool_auto_download" label="允许种子池自动下载" color="primary" hide-details /></div>
                   <div class="setting-toggle"><VIcon icon="mdi-layers-triple-outline" /><VSwitch v-model="bootstrap.config.allow_same_slot" label="允许相同质量槽位" color="primary" hide-details /></div>
+                  <div class="setting-toggle setting-toggle--featured"><VIcon icon="mdi-shield-lock-outline" /><VSwitch v-model="bootstrap.config.proxy_enabled" label="站点请求全程使用代理" color="primary" hide-details /></div>
                 </div>
+                <p class="field-help mb-5">开启后，站点搜索、全站分页、详情解析和种子文件下载统一使用 MoviePilot 系统代理；关闭后直连。Emby 局域网连接不走代理。</p>
                 <div class="settings-grid">
                   <VSelect v-model="bootstrap.config.max_versions" label="每个影片/每集最多版本" :items="[1,2,3]" />
                   <VTextField v-model.number="bootstrap.config.auto_batch_limit" type="number" min="1" max="50" label="每次自动下载数量" hint="扫描完成和自动下载 Cron 均使用此数量；范围 1–50" persistent-hint />

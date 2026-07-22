@@ -45,5 +45,11 @@ def build_category_site(site: dict, source: MovieSource) -> dict:
     return result
 
 
+def with_site_proxy(site: dict, enabled: bool) -> dict:
+    result = deepcopy(site)
+    result["proxy"] = bool(enabled)
+    return result
+
+
 def should_continue_pages(*, result_count: int, page_size: int, new_count: int) -> bool:
     return new_count > 0 and result_count >= page_size

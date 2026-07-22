@@ -31,8 +31,23 @@ from .quality import (
     select_save_path,
     tv_exclusion_reason,
 )
-from .sources import UBITS_MOVIE_SOURCES, build_category_site, is_ubits_domain, should_continue_pages
+from .sources import (
+    UBITS_MOVIE_SOURCES,
+    build_category_site,
+    is_ubits_domain,
+    should_continue_pages,
+    with_site_proxy,
+)
 from .store import PluginStore, dumps
+
+
+class ProxySearchChain(SearchChain):
+    def __init__(self, proxy_enabled: bool):
+        super().__init__()
+        self.proxy_enabled = bool(proxy_enabled)
+
+    def search_torrents(self, site: dict, *args, **kwargs):
+        return super().search_torrents(with_site_proxy(site, self.proxy_enabled), *args, **kwargs)
 
 
 class LibraryDownloadService:
@@ -40,6 +55,9 @@ class LibraryDownloadService:
         self.store = store
         self.config = config
         self._auto_download_lock = Lock()
+
+    def _search_chain(self) -> ProxySearchChain:
+        return ProxySearchChain(bool(self.config().get("proxy_enabled")))
 
     def options(self) -> dict:
         sites = [
@@ -118,7 +136,7 @@ class LibraryDownloadService:
         ]
         if not sites:
             raise RuntimeError("电影分类地址仅支持 UBits，请在搜索站点中选择 UBits")
-        search = SearchChain()
+        search = self._search_chain()
         candidates: dict[str, dict] = {}
         errors = []
         profile = self._base_profile()
@@ -339,7 +357,7 @@ class LibraryDownloadService:
             target for target in self.store.list_targets()
             if target["enabled"] and (not wanted or target["id"] in wanted)
         ]
-        search = SearchChain()
+        search = self._search_chain()
         total, eligible, downloads = 0, 0, []
         remaining_auto = max(1, min(50, _int(self.config().get("auto_batch_limit"), 5)))
         for target in targets:
@@ -427,7 +445,7 @@ class LibraryDownloadService:
         meta = MetaInfo(title=candidate["title"], subtitle=candidate.get("description"))
         media = self._restore_media(candidate.get("media"))
         if not media:
-            media = SearchChain().recognize_media(meta=meta)
+            media = self._search_chain().recognize_media(meta=meta)
         if not media:
             return {"candidate_key": candidate_key, "success": False, "message": "媒体信息识别失败，未提交下载"}
         config = self.config()
@@ -475,7 +493,7 @@ class LibraryDownloadService:
                 return {"candidate_key": candidate_key, "success": False, "message": "站点配置不存在"}
             torrent.site_cookie = site.cookie
             torrent.site_ua = site.ua
-            torrent.site_proxy = bool(site.proxy)
+            torrent.site_proxy = bool(config.get("proxy_enabled"))
             torrent.site_downloader = site.downloader
             context = Context(meta_info=meta, media_info=media, torrent_info=torrent, resource_source="plugin")
             download_id, error = DownloadChain().download_single(

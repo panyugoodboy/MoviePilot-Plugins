@@ -19,6 +19,7 @@ UBITS_MOVIE_SOURCES = sources_module.UBITS_MOVIE_SOURCES
 build_category_site = sources_module.build_category_site
 is_ubits_domain = sources_module.is_ubits_domain
 should_continue_pages = sources_module.should_continue_pages
+with_site_proxy = sources_module.with_site_proxy
 
 
 def test_ubits_movie_sources_use_the_four_requested_filters_and_page_placeholder():
@@ -64,3 +65,15 @@ def test_ubits_domain_and_all_page_stop_rules():
     assert should_continue_pages(result_count=100, page_size=100, new_count=100) is True
     assert should_continue_pages(result_count=99, page_size=100, new_count=99) is False
     assert should_continue_pages(result_count=100, page_size=100, new_count=0) is False
+
+
+def test_site_proxy_setting_overrides_site_without_mutating_it():
+    site = {"id": 7, "proxy": False, "browse": {"path": "torrents.php"}}
+
+    proxied = with_site_proxy(site, True)
+    direct = with_site_proxy({**site, "proxy": True}, False)
+
+    assert proxied["proxy"] is True
+    assert direct["proxy"] is False
+    assert site["proxy"] is False
+    assert proxied is not site

@@ -33,6 +33,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "auto_batch_limit": 5,
     "max_versions": 3,
     "allow_same_slot": False,
+    "proxy_enabled": True,
     "movie_save_path": "",
     "tv_save_path": "",
     "quality_save_paths": {},
@@ -60,7 +61,7 @@ class EmbyLibraryDownload(_PluginBase):
     plugin_name = "联动EMBY库筛选下载"
     plugin_desc = "以 Emby 实际媒体版本为准，按站点和质量规则搜索、限量并下载资源。"
     plugin_icon = "emby.png"
-    plugin_version = "0.3.0"
+    plugin_version = "0.3.1"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "embylibrarydownload_"
@@ -425,6 +426,7 @@ class EmbyLibraryDownload(_PluginBase):
         result["max_versions"] = max(1, min(3, cls._to_int(result.get("max_versions"), 3)))
         result["auto_batch_limit"] = max(1, min(50, cls._to_int(result.get("auto_batch_limit"), 5)))
         result["exclude_tv"] = cls._to_bool(result.get("exclude_tv"), True)
+        result["proxy_enabled"] = cls._to_bool(result.get("proxy_enabled"), True)
         for key in (
             "notify_enabled", "notify_inventory", "notify_targets",
             "notify_pool", "notify_download", "notify_failures",
