@@ -52,7 +52,7 @@ class EmbyLibraryDownload(_PluginBase):
     plugin_name = "联动EMBY库筛选下载"
     plugin_desc = "以 Emby 实际媒体版本为准，按站点和质量规则搜索、限量并下载资源。"
     plugin_icon = "emby.png"
-    plugin_version = "0.2.6"
+    plugin_version = "0.2.7"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "embylibrarydownload_"
@@ -207,7 +207,7 @@ class EmbyLibraryDownload(_PluginBase):
         return self._start_task("inventory", self._sync_inventory)
 
     def _api_targets(self) -> dict:
-        return self._ok(self._require_store().list_targets())
+        return self._ok(self._require_store().list_targets(with_inventory=True))
 
     def _api_create_target(self, payload: Dict[str, Any] = Body(default={})) -> dict:
         try:
@@ -227,7 +227,7 @@ class EmbyLibraryDownload(_PluginBase):
 
     def _api_search_targets(self, payload: Dict[str, Any] = Body(default={})) -> dict:
         target_ids = payload.get("target_ids") or []
-        return self._start_task("targets", self._search_targets, target_ids)
+        return self._start_task("targets", self._search_targets, target_ids, False)
 
     def _api_candidates(
         self,
@@ -264,8 +264,10 @@ class EmbyLibraryDownload(_PluginBase):
     def _sync_inventory(self) -> dict:
         return self._require_service().sync_inventory()
 
-    def _search_targets(self, target_ids: Optional[List[int]] = None) -> dict:
-        return self._require_service().search_targets(target_ids)
+    def _search_targets(
+        self, target_ids: Optional[List[int]] = None, allow_auto_download: bool = True
+    ) -> dict:
+        return self._require_service().search_targets(target_ids, allow_auto_download)
 
     def _refresh_pool(self) -> dict:
         return self._require_service().refresh_pool(lambda value: self._set_task_progress("pool", value))

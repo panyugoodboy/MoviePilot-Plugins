@@ -1,1 +1,0 @@
-import{importShared as o}from"./__federation_fn_import-E6wRZccp.js";import p from"./__federation_expose_AppPage-Do-4AfXZ.js";const{openBlock:t,createBlock:r}=await o("vue"),m={__name:"Page",props:{api:{type:Object,default:()=>({})}},setup(e){const a=e;return(c,i)=>(t(),r(p,{api:a.api,"plugin-id":"EmbyLibraryDownload"},null,8,["api"]))}};export{m as default};

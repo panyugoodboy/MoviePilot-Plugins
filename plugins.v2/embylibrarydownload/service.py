@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 from threading import Lock
 from typing import Any, Callable, Iterable, Mapping, Optional
 from urllib.parse import urlencode
@@ -238,7 +239,9 @@ class LibraryDownloadService:
                 "message": f"成功添加 {len(downloads)} / {limit} 个下载",
             }
 
-    def search_targets(self, target_ids: Optional[Iterable[int]] = None) -> dict:
+    def search_targets(
+        self, target_ids: Optional[Iterable[int]] = None, allow_auto_download: bool = True
+    ) -> dict:
         wanted = {int(value) for value in target_ids or []}
         targets = [
             target for target in self.store.list_targets()
@@ -255,13 +258,7 @@ class LibraryDownloadService:
                 seasons = target.get("seasons") if target["media_type"] == "tv" else [None]
                 seasons = seasons or [None]
                 for season in seasons:
-                    contexts.extend(search.search_by_id(
-                        source=target["media_source"],
-                        mediaid=str(target["media_id"]),
-                        mtype=MediaType.TV if target["media_type"] == "tv" else MediaType.MOVIE,
-                        season=_int(season) or None,
-                        sites=sites,
-                    ) or [])
+                    contexts.extend(self._search_target_by_id(search, target, season, sites))
             else:
                 query = f"{target['title']} {target.get('year') or ''}".strip()
                 contexts = search.search_by_title(title=query, sites=sites) or []
@@ -276,7 +273,8 @@ class LibraryDownloadService:
             self.store.replace_candidates(f"target:{target['id']}", rows)
             total += len(rows)
             eligible += sum(1 for row in rows if row["eligible"])
-            if self.config().get("auto_download") and target.get("auto_download") and remaining_auto > 0:
+            if allow_auto_download and self.config().get("auto_download") \
+                    and target.get("auto_download") and remaining_auto > 0:
                 page = self.store.list_candidates(
                     page=1, page_size=remaining_auto, scope=f"target:{target['id']}"
                 )
@@ -284,6 +282,21 @@ class LibraryDownloadService:
                 downloads.extend(self.dispatch(keys, automatic=True))
                 remaining_auto -= len(keys)
         return {"targets": len(targets), "found": total, "eligible": eligible, "downloads": downloads}
+
+    @staticmethod
+    def _search_target_by_id(search: SearchChain, target: Mapping[str, Any], season: Any, sites: list[int]) -> list:
+        media_type = MediaType.TV if target["media_type"] == "tv" else MediaType.MOVIE
+        common = {"mtype": media_type, "season": _int(season) or None, "sites": sites}
+        if "source" in inspect.signature(search.search_by_id).parameters:
+            return search.search_by_id(
+                source=target["media_source"], mediaid=str(target["media_id"]), **common
+            ) or []
+        if target["media_source"] == "themoviedb":
+            return search.search_by_id(tmdbid=_int(target["media_id"]), **common) or []
+        if target["media_source"] == "douban":
+            return search.search_by_id(doubanid=str(target["media_id"]), **common) or []
+        query = f"{target['title']} {target.get('year') or ''}".strip()
+        return search.search_by_title(title=query, sites=sites) or []
 
     def dispatch(self, candidate_keys: Iterable[str], automatic: bool = False) -> list[dict]:
         results = []

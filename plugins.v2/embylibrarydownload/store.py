@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -284,10 +285,52 @@ class PluginStore:
         ).fetchone()
         return int(row[0] or 0)
 
-    def list_targets(self) -> list[dict]:
+    def list_targets(self, with_inventory: bool = False) -> list[dict]:
         with self.connect() as conn:
             rows = conn.execute("SELECT * FROM targets ORDER BY enabled DESC, year DESC, id DESC").fetchall()
-        return [_decode(row) for row in rows]
+            targets = [_decode(row) for row in rows]
+            if with_inventory:
+                ready = bool(conn.execute(
+                    "SELECT 1 FROM plugin_state WHERE key='inventory_sync' AND value='success'"
+                ).fetchone())
+                for target in targets:
+                    count = self._target_inventory_count(conn, target) if ready else 0
+                    target.update({
+                        "inventory_state": "present" if count else "missing" if ready else "unknown",
+                        "inventory_count": count,
+                        "in_library": bool(count),
+                    })
+        return targets
+
+    @staticmethod
+    def _target_inventory_count(conn: sqlite3.Connection, target: Mapping[str, Any]) -> int:
+        media_type = str(target.get("media_type") or "movie").lower()
+        source = str(target.get("media_source") or "themoviedb").lower()
+        media_id = str(target.get("media_id") or "").strip()
+        if media_id and source in {"themoviedb", "imdb", "tvdb"}:
+            base = f"{media_type}:{source}:{media_id}"
+            row = conn.execute(
+                "SELECT COUNT(DISTINCT version_key) FROM inventory_versions "
+                "WHERE media_key=? OR media_key LIKE ?",
+                (base, f"{base}:%"),
+            ).fetchone()
+            return int(row[0] or 0)
+
+        clauses, params = ["item_type=?"], [media_type]
+        year = _int(target.get("year"))
+        if year:
+            clauses.append("(year=? OR year IS NULL)")
+            params.append(year)
+        rows = conn.execute(
+            "SELECT version_key, title, original_title FROM inventory_versions WHERE "
+            + " AND ".join(clauses),
+            params,
+        ).fetchall()
+        title = _normalize_title(target.get("title"))
+        return len({
+            row["version_key"] for row in rows
+            if title and title in {_normalize_title(row["title"]), _normalize_title(row["original_title"])}
+        })
 
     def get_target(self, target_id: int) -> Optional[dict]:
         with self.connect() as conn:
@@ -661,6 +704,10 @@ def _int(value: Any, default: int = 0) -> int:
 
 def _none(value: Any) -> Optional[str]:
     return str(value).strip() if value not in (None, "") else None
+
+
+def _normalize_title(value: Any) -> str:
+    return " ".join(re.findall(r"[^\W_]+", str(value or "").casefold(), re.UNICODE))
 
 
 def _keys_overlap(left: str, right: str) -> bool:

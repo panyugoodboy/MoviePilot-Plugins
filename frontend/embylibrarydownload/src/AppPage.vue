@@ -53,6 +53,7 @@ const candidateScopeLabel = computed(() => {
 })
 const hasRunningTask = computed(() => Object.values(bootstrap.tasks || {}).some(task => task.status === 'running'))
 const poolTask = computed(() => bootstrap.tasks?.pool || null)
+const targetTask = computed(() => bootstrap.tasks?.targets || null)
 const poolProgress = computed(() => poolTask.value?.progress || {})
 const pageCandidateKeys = computed(() => candidates.items.map(item => item.candidate_key))
 const allPageSelected = computed(() => pageCandidateKeys.value.length > 0 && pageCandidateKeys.value.every(key => selectedCandidates.value.includes(key)))
@@ -257,6 +258,18 @@ async function deleteTarget(target) {
 async function searchTarget(target = null) {
   await call('post', '/targets/search', { target_ids: target ? [target.id] : [] })
   toast?.info?.('目标搜索已开始')
+  await loadOverview()
+  startPolling()
+}
+
+async function quickSearchTarget(target) {
+  Object.assign(candidates, {
+    scope: `target:${target.id}`, page: 1, keyword: '', site_id: null,
+    items: [], total: 0, quality_counts: {},
+  })
+  tab.value = 'pool'
+  await call('post', '/targets/search', { target_ids: [target.id] })
+  toast?.info?.(`正在快速搜索“${target.title}”`)
   await loadOverview()
   startPolling()
 }
@@ -467,16 +480,16 @@ onBeforeUnmount(() => {
       <VWindowItem value="targets">
         <section aria-labelledby="targets-title">
           <div class="section-heading">
-            <div><h2 id="targets-title">目标清单</h2><p>目标可单独指定站点、版本数、季和保存路径。</p></div>
+            <div><h2 id="targets-title">目标清单</h2><p>逐项显示是否已经入库；每个目标都可快速搜索并直接查看站点候选。</p></div>
             <div class="button-row"><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-magnify" @click="searchTarget()">搜索全部</VBtn><VBtn class="action-btn" color="primary" prepend-icon="mdi-plus" @click="openTarget()">新增目标</VBtn></div>
           </div>
           <VAlert v-if="!targets.length" type="info" variant="tonal">暂无目标。新增电影或剧集目标后，可手动搜索或启用自动下载。</VAlert>
           <div class="target-grid">
             <VCard v-for="target in targets" :key="target.id" variant="outlined" class="target-card">
               <VCardText>
-                <div class="target-top"><div><span class="eyebrow">{{ target.media_type === 'tv' ? 'SERIES' : 'MOVIE' }}</span><h3>{{ target.title }} <small>{{ target.year || '' }}</small></h3></div><VChip :color="target.enabled ? 'success' : 'default'" size="small">{{ target.enabled ? '启用' : '停用' }}</VChip></div>
-                <dl><div><dt>媒体标识</dt><dd>{{ target.media_source }}:{{ target.media_id || '标题识别' }}</dd></div><div><dt>版本目标</dt><dd>{{ target.desired_versions }} / 最大 3</dd></div><div><dt>自动下载</dt><dd>{{ target.auto_download ? '是' : '否' }}</dd></div><div><dt>种子池优先</dt><dd>{{ target.prefer_scanned_pool ? '是' : '否' }}</dd></div></dl>
-                <div class="button-row mt-4"><VBtn variant="tonal" size="small" @click="searchTarget(target)">搜索</VBtn><VBtn variant="text" size="small" @click="showTargetCandidates(target)">候选</VBtn><VBtn variant="text" size="small" @click="openTarget(target)">编辑</VBtn><VBtn variant="text" color="error" size="small" @click="deleteTarget(target)">删除</VBtn></div>
+                <div class="target-top"><div><span class="eyebrow">{{ target.media_type === 'tv' ? 'SERIES' : 'MOVIE' }}</span><h3>{{ target.title }} <small>{{ target.year || '' }}</small></h3></div><div class="target-status"><VChip :color="target.inventory_state === 'present' ? 'success' : target.inventory_state === 'missing' ? 'error' : 'default'" size="small">{{ target.inventory_state === 'present' ? '已入库' : target.inventory_state === 'missing' ? '未入库' : '库存未同步' }}</VChip><VChip :color="target.enabled ? 'primary' : 'default'" size="small" variant="tonal">{{ target.enabled ? '启用' : '停用' }}</VChip></div></div>
+                <dl><div><dt>媒体标识</dt><dd>{{ target.media_source }}:{{ target.media_id || '标题识别' }}</dd></div><div><dt>库存记录</dt><dd>{{ target.inventory_count || 0 }}</dd></div><div><dt>版本目标</dt><dd>{{ target.desired_versions }} / 最大 3</dd></div><div><dt>自动下载</dt><dd>{{ target.auto_download ? '是' : '否' }}</dd></div><div><dt>种子池优先</dt><dd>{{ target.prefer_scanned_pool ? '是' : '否' }}</dd></div></dl>
+                <div class="button-row mt-4"><VBtn color="primary" variant="tonal" size="small" prepend-icon="mdi-magnify" @click="quickSearchTarget(target)">快速搜索</VBtn><VBtn variant="text" size="small" @click="showTargetCandidates(target)">查看结果</VBtn><VBtn variant="text" size="small" @click="openTarget(target)">编辑</VBtn><VBtn variant="text" color="error" size="small" @click="deleteTarget(target)">删除</VBtn></div>
               </VCardText>
             </VCard>
           </div>
@@ -486,9 +499,10 @@ onBeforeUnmount(() => {
       <VWindowItem value="pool">
         <section aria-labelledby="pool-title">
           <div class="section-heading">
-            <div><h2 id="pool-title">{{ candidateScopeLabel }}</h2><p>按 UBits 的 WEB-DL、Remux、DIY 原盘、Encode 分类扫描全部页面；列表固定每页 50 条并按年份倒序。</p></div>
+            <div><h2 id="pool-title">{{ candidateScopeLabel }}</h2><p>{{ candidates.scope === 'pool' ? '按 UBits 的 WEB-DL、Remux、DIY 原盘、Encode 分类扫描全部页面；列表固定每页 50 条并按年份倒序。' : '这里展示目标快速搜索得到的站点候选；搜索结束后会自动刷新。' }}</p></div>
             <div class="button-row"><VBtn v-if="candidates.scope !== 'pool'" class="action-btn" variant="text" @click="candidates.scope='pool'; candidates.page=1; loadCandidates()">返回全站</VBtn><VBtn class="action-btn" color="primary" prepend-icon="mdi-radar" :loading="poolTask?.status === 'running'" @click="runTask('/pool/refresh', 'UBits 电影分类刷新已开始')">刷新 UBits 电影分类</VBtn></div>
           </div>
+          <VAlert v-if="candidates.scope !== 'pool' && targetTask && ['running','failed'].includes(targetTask.status)" :type="targetTask.status === 'failed' ? 'error' : 'info'" variant="tonal" class="mb-4"><strong>{{ targetTask.status === 'running' ? '正在快速搜索目标站点资源…' : `搜索失败：${targetTask.message}` }}</strong><VProgressLinear v-if="targetTask.status === 'running'" indeterminate color="primary" class="mt-2" /></VAlert>
           <VAlert v-if="poolTask && (poolTask.status === 'running' || poolProgress.completed_pages)" :type="poolTask?.status === 'running' ? 'info' : poolTask?.status === 'failed' ? 'error' : 'success'" variant="tonal" class="mb-4">
             <div class="d-flex justify-space-between flex-wrap ga-2 mb-2">
               <strong>{{ poolTask?.status === 'running' ? poolTask.message : `上次刷新：${poolTask?.message || '已完成'}` }}</strong>
@@ -657,6 +671,7 @@ p { color: rgb(var(--v-theme-on-surface-variant)); margin: 0; }
 .target-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .target-card { border-radius: 16px; }
 .target-top { display: flex; justify-content: space-between; gap: 12px; }
+.target-status { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .target-top small { font-weight: 400; color: rgb(var(--v-theme-on-surface-variant)); }
 dl { display: grid; gap: 8px; margin: 18px 0 0; }
 dl div { display: flex; justify-content: space-between; gap: 18px; font-size: .86rem; }

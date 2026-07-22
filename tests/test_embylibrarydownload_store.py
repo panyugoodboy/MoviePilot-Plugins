@@ -168,6 +168,67 @@ def test_target_scanned_pool_preference_is_saved_and_defaults_off(tmp_path):
     assert target["prefer_scanned_pool"] is True
 
 
+def test_target_list_marks_inventory_presence_and_missing_targets(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    present = store.save_target({
+        "title": "Present Movie", "year": 2026,
+        "media_source": "themoviedb", "media_id": "10",
+    })
+    missing = store.save_target({
+        "title": "Missing Movie", "year": 2026,
+        "media_source": "themoviedb", "media_id": "99",
+    })
+
+    unknown = {target["id"]: target for target in store.list_targets(with_inventory=True)}
+    assert unknown[present["id"]]["inventory_state"] == "unknown"
+    assert unknown[missing["id"]]["inventory_state"] == "unknown"
+
+    store.replace_inventory("Emby", [inventory_row("present-v1", "movie:themoviedb:10")])
+    store.mark_inventory_synced()
+    targets = {target["id"]: target for target in store.list_targets(with_inventory=True)}
+
+    assert targets[present["id"]]["inventory_state"] == "present"
+    assert targets[present["id"]]["in_library"] is True
+    assert targets[present["id"]]["inventory_count"] == 1
+    assert targets[missing["id"]]["inventory_state"] == "missing"
+    assert targets[missing["id"]]["in_library"] is False
+
+
+def test_target_inventory_title_fallback_uses_original_title_and_year(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    target = store.save_target({"title": "Original Movie", "year": 2026})
+    row = inventory_row("original-v1", "movie:themoviedb:80")
+    row.update({"title": "中文电影", "original_title": "Original.Movie", "year": 2026})
+    wrong_year = inventory_row("wrong-year", "movie:themoviedb:81")
+    wrong_year.update({"title": "Original Movie", "original_title": "Original Movie", "year": 2025})
+    store.replace_inventory("Emby", [row, wrong_year])
+    store.mark_inventory_synced()
+
+    result = {item["id"]: item for item in store.list_targets(with_inventory=True)}[target["id"]]
+
+    assert result["inventory_state"] == "present"
+    assert result["inventory_count"] == 1
+
+
+def test_tv_target_inventory_matches_episode_media_key_prefix(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    target = store.save_target({
+        "title": "Series", "media_type": "tv",
+        "media_source": "themoviedb", "media_id": "20",
+    })
+    first = inventory_row("episode-1", "tv:themoviedb:20:S01E01")
+    second = inventory_row("episode-2", "tv:themoviedb:20:S01E02")
+    for row in (first, second):
+        row["item_type"] = "tv"
+    store.replace_inventory("Emby", [first, second])
+    store.mark_inventory_synced()
+
+    result = {item["id"]: item for item in store.list_targets(with_inventory=True)}[target["id"]]
+
+    assert result["inventory_state"] == "present"
+    assert result["inventory_count"] == 2
+
+
 def test_pool_reservation_records_matched_target_override(tmp_path):
     store = PluginStore(tmp_path / "state.db")
     target = store.save_target({"title": "Movie", "prefer_scanned_pool": True})
