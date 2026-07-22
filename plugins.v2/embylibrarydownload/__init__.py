@@ -51,7 +51,7 @@ class EmbyLibraryDownload(_PluginBase):
     plugin_name = "联动EMBY库筛选下载"
     plugin_desc = "以 Emby 实际媒体版本为准，按站点和质量规则搜索、限量并下载资源。"
     plugin_icon = "emby.png"
-    plugin_version = "0.2.2"
+    plugin_version = "0.2.3"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "embylibrarydownload_"
@@ -223,9 +223,10 @@ class EmbyLibraryDownload(_PluginBase):
         keyword: str = "",
         site_id: Optional[int] = None,
         eligible_only: bool = True,
+        quality_type: str = "",
     ) -> dict:
         return self._ok(self._require_store().list_candidates(
-            page, page_size, scope, keyword, site_id, eligible_only
+            page, page_size, scope, keyword, site_id, eligible_only, quality_type
         ))
 
     def _api_refresh_pool(self) -> dict:

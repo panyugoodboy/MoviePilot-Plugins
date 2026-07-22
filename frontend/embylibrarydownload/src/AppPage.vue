@@ -22,7 +22,10 @@ const bootstrap = reactive({
 })
 const inventory = reactive({ items: [], total: 0, page: 1, keyword: '', media_type: '' })
 const targets = ref([])
-const candidates = reactive({ items: [], total: 0, page: 1, keyword: '', site_id: null, scope: 'pool' })
+const candidates = reactive({
+  items: [], total: 0, page: 1, keyword: '', site_id: null, scope: 'pool',
+  quality_type: 'webdl', quality_counts: {},
+})
 const selectedCandidates = ref([])
 const jobs = reactive({ items: [], total: 0, page: 1 })
 const confirmDownload = ref(false)
@@ -33,8 +36,17 @@ let pollTimer = null
 
 const siteItems = computed(() => bootstrap.options.sites || [])
 const serverItems = computed(() => (bootstrap.options.emby_servers || []).map(item => item.name))
+const poolQualityItems = [
+  { title: 'WEB-DL', value: 'webdl' },
+  { title: 'Remux', value: 'remux' },
+  { title: 'DIY 原盘', value: 'diy' },
+  { title: 'Encode', value: 'encode' },
+]
 const candidateScopeLabel = computed(() => {
-  if (candidates.scope === 'pool') return '全站种子池'
+  if (candidates.scope === 'pool') {
+    const category = poolQualityItems.find(item => item.value === candidates.quality_type)
+    return `全站种子池 · ${category?.title || '分类'}`
+  }
   const id = Number(candidates.scope.split(':')[1])
   const target = targets.value.find(item => item.id === id)
   return target ? `${target.title} 的候选资源` : '目标候选资源'
@@ -142,8 +154,13 @@ async function loadCandidates() {
       keyword: candidates.keyword,
       site_id: candidates.site_id || undefined,
       eligible_only: true,
+      quality_type: candidates.scope === 'pool' ? candidates.quality_type : undefined,
     })
-    Object.assign(candidates, { items: data.items, total: data.total })
+    Object.assign(candidates, {
+      items: data.items,
+      total: data.total,
+      quality_counts: data.quality_counts || {},
+    })
   } finally {
     loading.value = false
   }
@@ -247,6 +264,13 @@ async function showTargetCandidates(target) {
   candidates.scope = `target:${target.id}`
   candidates.page = 1
   tab.value = 'pool'
+  await loadCandidates()
+}
+
+async function selectPoolQuality(value) {
+  if (!value) return
+  candidates.quality_type = value
+  candidates.page = 1
   await loadCandidates()
 }
 
@@ -463,6 +487,13 @@ onBeforeUnmount(() => {
             <VProgressLinear :model-value="poolProgress.percent || 0" color="primary" height="8" rounded />
             <small>已发现 {{ poolProgress.found || 0 }} 个候选，其中 {{ poolProgress.eligible || 0 }} 个符合规则</small>
           </VAlert>
+          <div v-if="candidates.scope === 'pool'" class="pool-quality-tabs">
+            <VTabs :model-value="candidates.quality_type" show-arrows aria-label="种子池质量分类" @update:model-value="selectPoolQuality">
+              <VTab v-for="item in poolQualityItems" :key="item.value" :value="item.value">
+                <span class="pool-tab-label">{{ item.title }} <VChip size="x-small" variant="tonal">{{ candidates.quality_counts[item.value] || 0 }}</VChip></span>
+              </VTab>
+            </VTabs>
+          </div>
           <div class="filter-row">
             <VTextField v-model="candidates.keyword" label="搜索种子标题" prepend-inner-icon="mdi-magnify" clearable hide-details @keyup.enter="loadCandidates" />
             <VSelect v-model="candidates.site_id" label="站点" :items="siteItems" item-title="name" item-value="id" clearable hide-details />
@@ -606,6 +637,9 @@ p { color: rgb(var(--v-theme-on-surface-variant)); margin: 0; }
 .workflow-grid > div { display: grid; gap: 7px; }
 .workflow-grid span { color: rgb(var(--v-theme-on-surface-variant)); font-size: .86rem; }
 .filter-row { display: grid; grid-template-columns: minmax(240px, 2fr) minmax(180px, 1fr) auto; margin: 18px 0; }
+.pool-quality-tabs { margin-top: 18px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: rgb(var(--v-theme-surface)); }
+.pool-quality-tabs :deep(.v-tab) { min-height: 48px; text-transform: none; }
+.pool-tab-label { display: inline-flex; align-items: center; gap: 8px; }
 .desktop-table { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: rgb(var(--v-theme-surface)); }
 .path-cell { display: block; max-width: 440px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .target-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }

@@ -400,6 +400,7 @@ class PluginStore:
         keyword: str = "",
         site_id: Optional[int] = None,
         eligible_only: bool = True,
+        quality_type: str = "",
     ) -> dict:
         page, page_size = _page_values(page, page_size)
         clauses, params = ["scope=?"], [scope]
@@ -411,8 +412,20 @@ class PluginStore:
             params.append(int(site_id))
         if eligible_only:
             clauses.append("eligible=1")
+        base_where = " WHERE " + " AND ".join(clauses)
+        base_params = list(params)
+        if quality_type:
+            clauses.append("quality_type=?")
+            params.append(str(quality_type))
         where = " WHERE " + " AND ".join(clauses)
         with self.connect() as conn:
+            quality_counts = {
+                row["quality_type"]: row["total"]
+                for row in conn.execute(
+                    f"SELECT quality_type, COUNT(*) AS total FROM candidates{base_where} GROUP BY quality_type",
+                    base_params,
+                ).fetchall()
+            }
             total = conn.execute(f"SELECT COUNT(*) FROM candidates{where}", params).fetchone()[0]
             rows = conn.execute(
                 f"SELECT * FROM candidates{where} "
@@ -420,7 +433,13 @@ class PluginStore:
                 "LIMIT ? OFFSET ?",
                 [*params, page_size, (page - 1) * page_size],
             ).fetchall()
-        return {"items": [_decode(row) for row in rows], "total": total, "page": page, "page_size": page_size}
+        return {
+            "items": [_decode(row) for row in rows],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "quality_counts": quality_counts,
+        }
 
     def reserve_download(
         self,

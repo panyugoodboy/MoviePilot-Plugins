@@ -113,6 +113,33 @@ def test_candidate_pages_are_fixed_to_fifty_and_year_descending(tmp_path):
     assert len(second["items"]) == 5
 
 
+def test_pool_candidates_are_filtered_and_counted_by_quality_category(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    rows = []
+    for key, quality_type in (
+        ("webdl", "webdl"),
+        ("remux-a", "remux"),
+        ("remux-b", "remux"),
+        ("diy", "diy"),
+        ("encode", "encode"),
+    ):
+        row = candidate(key)
+        row["quality_type"] = quality_type
+        rows.append(row)
+    store.replace_candidates("pool", rows)
+
+    result = store.list_candidates(scope="pool", quality_type="remux")
+
+    assert result["total"] == 2
+    assert {item["quality_type"] for item in result["items"]} == {"remux"}
+    assert result["quality_counts"] == {
+        "webdl": 1,
+        "remux": 2,
+        "diy": 1,
+        "encode": 1,
+    }
+
+
 def test_tv_season_cap_counts_episode_versions(tmp_path):
     store = PluginStore(tmp_path / "state.db")
     episode_key = "tv:themoviedb:20:S01E01"
