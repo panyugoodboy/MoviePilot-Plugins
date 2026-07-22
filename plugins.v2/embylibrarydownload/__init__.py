@@ -61,7 +61,7 @@ class EmbyLibraryDownload(_PluginBase):
     plugin_name = "联动EMBY库筛选下载"
     plugin_desc = "以 Emby 实际媒体版本为准，按站点和质量规则搜索、限量并下载资源。"
     plugin_icon = "emby.png"
-    plugin_version = "0.3.1"
+    plugin_version = "0.3.2"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "embylibrarydownload_"
@@ -143,6 +143,9 @@ class EmbyLibraryDownload(_PluginBase):
             self._route("/downloads", self._api_downloads, ["POST"], "批量提交下载"),
             self._route("/jobs", self._api_jobs, ["GET"], "下载任务"),
             self._route("/jobs/{job_id}/cancel", self._api_cancel_job, ["POST"], "取消未提交任务"),
+            self._route("/jobs/delete", self._api_delete_jobs, ["POST"], "批量删除下载任务"),
+            self._route("/jobs/retry", self._api_retry_jobs, ["POST"], "批量重试下载任务"),
+            self._route("/jobs/retry-failed", self._api_retry_failed_jobs, ["POST"], "重试全部失败任务"),
             self._route("/notifications/test", self._api_test_notification, ["POST"], "发送测试通知"),
         ]
 
@@ -277,6 +280,31 @@ class EmbyLibraryDownload(_PluginBase):
         success, message = self._require_store().cancel_job(job_id)
         return self._ok(None, "任务已取消") if success else self._error(message)
 
+    def _api_delete_jobs(self, payload: Dict[str, Any] = Body(default={})) -> dict:
+        job_ids = payload.get("job_ids") or []
+        if not job_ids:
+            return self._error("请至少选择一个下载任务")
+        if len(job_ids) > 50:
+            return self._error("单次最多删除当前页 50 个任务")
+        result = self._require_store().delete_jobs(job_ids)
+        return self._ok(
+            result,
+            f"已删除 {result['deleted']} 个任务，跳过 {result['blocked'] + result['missing']} 个",
+        )
+
+    def _api_retry_jobs(self, payload: Dict[str, Any] = Body(default={})) -> dict:
+        job_ids = payload.get("job_ids") or []
+        if not job_ids:
+            return self._error("请至少选择一个下载任务")
+        if len(job_ids) > 50:
+            return self._error("单次最多重试当前页 50 个任务")
+        return self._start_task("job-retry", self._retry_jobs, job_ids, False)
+
+    def _api_retry_failed_jobs(self) -> dict:
+        if not self._require_store().retryable_jobs(all_failed=True):
+            return self._error("当前没有失败任务")
+        return self._start_task("job-retry", self._retry_jobs, [], True)
+
     def _api_test_notification(self) -> dict:
         summary = build_test_summary(self._now())
         self.post_message(
@@ -323,6 +351,11 @@ class EmbyLibraryDownload(_PluginBase):
             "failed": sum(1 for item in results if not item.get("success")),
             "results": results,
         }
+
+    def _retry_jobs(self, job_ids: List[int], all_failed: bool) -> dict:
+        return self._run_notified(
+            "downloads", self._require_service().retry_jobs, job_ids, all_failed
+        )
 
     def _run_notified(self, task_name: str, func, *args) -> dict:
         try:

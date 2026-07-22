@@ -27,7 +27,8 @@ const candidates = reactive({
   quality_type: 'webdl', quality_counts: {},
 })
 const selectedCandidates = ref([])
-const jobs = reactive({ items: [], total: 0, page: 1 })
+const selectedJobs = ref([])
+const jobs = reactive({ items: [], total: 0, failed_count: 0, page: 1 })
 const confirmDownload = ref(false)
 const targetDialog = ref(false)
 const editingTargetId = ref(null)
@@ -79,6 +80,9 @@ const targetPoolTask = computed(() => {
 const poolProgress = computed(() => poolTask.value?.progress || {})
 const pageCandidateKeys = computed(() => candidates.items.map(item => item.candidate_key))
 const allPageSelected = computed(() => pageCandidateKeys.value.length > 0 && pageCandidateKeys.value.every(key => selectedCandidates.value.includes(key)))
+const pageJobIds = computed(() => jobs.items.map(item => item.id))
+const allPageJobsSelected = computed(() => pageJobIds.value.length > 0 && pageJobIds.value.every(id => selectedJobs.value.includes(id)))
+const selectedRetryableJobs = computed(() => jobs.items.filter(item => selectedJobs.value.includes(item.id) && ['failed', 'cancelled'].includes(item.status)))
 
 const inventoryHeaders = [
   { title: '年份', key: 'year', width: 80 },
@@ -204,8 +208,9 @@ async function loadCandidates() {
 }
 
 async function loadJobs() {
+  selectedJobs.value = []
   const data = await call('get', '/jobs', null, { page: jobs.page, page_size: 50 })
-  Object.assign(jobs, { items: data.items, total: data.total })
+  Object.assign(jobs, { items: data.items, total: data.total, failed_count: data.failed_count || 0 })
 }
 
 async function runTask(path, successMessage) {
@@ -242,6 +247,37 @@ async function refreshCurrentTab() {
 
 function togglePageSelection() {
   selectedCandidates.value = allPageSelected.value ? [] : [...pageCandidateKeys.value]
+}
+
+function toggleJobPageSelection() {
+  selectedJobs.value = allPageJobsSelected.value ? [] : [...pageJobIds.value]
+}
+
+async function deleteSelectedJobs() {
+  const ids = [...selectedJobs.value]
+  if (!window.confirm(`确认删除所选 ${ids.length} 条任务记录？下载中的任务会自动跳过。`)) return
+  const result = await call('post', '/jobs/delete', { job_ids: ids })
+  toast?.success?.(`已删除 ${result.deleted} 条，跳过 ${result.blocked + result.missing} 条`)
+  await loadJobs()
+  await loadOverview()
+}
+
+async function retrySelectedJobs() {
+  const ids = selectedRetryableJobs.value.map(item => item.id)
+  await call('post', '/jobs/retry', { job_ids: ids })
+  selectedJobs.value = []
+  toast?.info?.(`已开始重试 ${ids.length} 个任务`)
+  await loadOverview()
+  startPolling()
+}
+
+async function retryAllFailedJobs() {
+  if (!window.confirm(`确认重试全部 ${jobs.failed_count} 个失败任务？每个任务仍会重新执行库存、重复种子和版本上限校验。`)) return
+  await call('post', '/jobs/retry-failed', {})
+  selectedJobs.value = []
+  toast?.info?.(`已开始重试全部 ${jobs.failed_count} 个失败任务`)
+  await loadOverview()
+  startPolling()
 }
 
 async function submitDownloads() {
@@ -753,14 +789,21 @@ onBeforeUnmount(() => {
 
       <VWindowItem value="jobs">
         <section aria-labelledby="jobs-title">
-          <div class="section-heading"><div><h2 id="jobs-title">下载任务</h2><p>受控队列会把 reserved、queued、downloading 都计入版本上限。</p></div><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-refresh" @click="loadJobs">刷新任务</VBtn></div>
-          <div class="desktop-table"><VDataTableServer :headers="jobHeaders" :items="jobs.items" :items-length="jobs.total" :items-per-page="50" :page="jobs.page" hover @update:page="value => { jobs.page=value; loadJobs() }">
+          <div class="section-heading"><div><h2 id="jobs-title">下载任务</h2><p>受控队列会把 reserved、queued、downloading 都计入版本上限。</p></div><div class="button-row"><VBtn class="action-btn" color="warning" variant="tonal" prepend-icon="mdi-restart-alert" :disabled="!jobs.failed_count || hasRunningTask" @click="retryAllFailedJobs">全部重试失败任务（{{ jobs.failed_count }}）</VBtn><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-refresh" @click="loadJobs">刷新任务</VBtn></div></div>
+          <div class="selection-bar">
+            <VCheckbox :model-value="allPageJobsSelected" :indeterminate="selectedJobs.length > 0 && !allPageJobsSelected" hide-details label="当前页全选" @update:model-value="toggleJobPageSelection" />
+            <span>已选 {{ selectedJobs.length }} / 当前页 {{ jobs.items.length }}</span>
+            <VSpacer />
+            <VBtn class="action-btn" color="error" variant="tonal" prepend-icon="mdi-delete-outline" :disabled="!selectedJobs.length || hasRunningTask" @click="deleteSelectedJobs">删除已选</VBtn>
+            <VBtn class="action-btn" color="primary" prepend-icon="mdi-restart" :disabled="!selectedRetryableJobs.length || hasRunningTask" @click="retrySelectedJobs">重试已选（{{ selectedRetryableJobs.length }}）</VBtn>
+          </div>
+          <div class="desktop-table"><VDataTableServer v-model="selectedJobs" show-select item-value="id" :headers="jobHeaders" :items="jobs.items" :items-length="jobs.total" :items-per-page="50" :page="jobs.page" hover @update:page="value => { jobs.page=value; loadJobs() }">
             <template #item.status="{ item }"><VChip :color="statusColor(item.status)" size="small">{{ item.status }}</VChip></template>
             <template #item.automatic="{ item }">{{ item.automatic ? '自动' : '手动' }}</template>
             <template #item.result="{ item }"><span :class="item.error ? 'text-error' : ''">{{ item.error || item.download_id || '等待中' }}</span></template>
             <template #bottom><VPagination v-model="jobs.page" :length="Math.max(1, Math.ceil(jobs.total / 50))" @update:model-value="loadJobs" /></template>
           </VDataTableServer></div>
-          <div class="mobile-list"><VCard v-for="item in jobs.items" :key="item.id" variant="outlined" class="mobile-card"><VCardText><div class="mobile-title">{{ item.title }}</div><div class="chip-row"><VChip :color="statusColor(item.status)" size="small">{{ item.status }}</VChip><VChip size="small" variant="text">{{ item.automatic ? '自动' : '手动' }}</VChip></div><small>{{ item.error || item.download_id || item.created_at }}</small></VCardText></VCard></div>
+          <div class="mobile-list"><VCard v-for="item in jobs.items" :key="item.id" variant="outlined" class="mobile-card"><VCardText><VCheckbox v-model="selectedJobs" :value="item.id" hide-details :label="item.created_at" /><div class="mobile-title">{{ item.title }}</div><div class="chip-row"><VChip :color="statusColor(item.status)" size="small">{{ item.status }}</VChip><VChip size="small" variant="text">{{ item.automatic ? '自动' : '手动' }}</VChip></div><small>{{ item.error || item.download_id || item.created_at }}</small></VCardText></VCard></div>
         </section>
       </VWindowItem>
 

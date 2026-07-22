@@ -158,6 +158,50 @@ def test_pending_auto_candidates_exclude_torrents_already_added_to_downloads(tmp
     assert store.pending_auto_candidate_keys() == ["next"]
 
 
+def test_retry_reservation_replaces_failed_job_with_new_attempt(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    store.replace_candidates("pool", [candidate("retry")])
+    media_key = "movie:themoviedb:200"
+    job_id, reason = store.reserve_download("retry", [media_key], 3, None, False)
+    assert job_id and not reason
+    store.update_job(job_id, "failed", error="network error")
+
+    retry_id, retry_reason = store.reserve_download(
+        "retry", [media_key], 3, None, False, retry_job_id=job_id
+    )
+
+    assert retry_id and retry_id != job_id
+    assert not retry_reason
+    page = store.list_jobs()
+    assert page["total"] == 1
+    assert page["items"][0]["id"] == retry_id
+    assert page["items"][0]["status"] == "reserved"
+    assert page["items"][0]["error"] is None
+
+
+def test_retryable_jobs_and_bulk_delete_only_use_safe_states(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    store.replace_candidates("pool", [candidate("active"), candidate("failed"), candidate("cancelled")])
+    jobs = []
+    for index, key in enumerate(("active", "failed", "cancelled"), start=1):
+        job_id, reason = store.reserve_download(
+            key, [f"movie:themoviedb:{300 + index}"], 3, None, False
+        )
+        assert job_id and not reason
+        jobs.append(job_id)
+    store.update_job(jobs[1], "failed", error="network error")
+    assert store.cancel_job(jobs[2])[0] is True
+
+    retryable = store.retryable_jobs(jobs)
+    failed = store.retryable_jobs(all_failed=True)
+    result = store.delete_jobs([*jobs, 999999])
+
+    assert {item["id"] for item in retryable} == {jobs[1], jobs[2]}
+    assert [item["id"] for item in failed] == [jobs[1]]
+    assert result == {"requested": 4, "deleted": 2, "blocked": 1, "missing": 1}
+    assert [item["id"] for item in store.list_jobs()["items"]] == [jobs[0]]
+
+
 def test_target_scanned_pool_preference_is_saved_and_defaults_off(tmp_path):
     store = PluginStore(tmp_path / "state.db")
     target = store.save_target({"title": "Movie", "auto_download": True})

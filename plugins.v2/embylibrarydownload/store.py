@@ -14,6 +14,8 @@ from typing import Any, Iterable, Iterator, Mapping, Optional
 
 ACTIVE_JOB_STATES = ("reserved", "queued", "downloading")
 DUPLICATE_JOB_STATES = (*ACTIVE_JOB_STATES, "present")
+RETRYABLE_JOB_STATES = ("failed", "cancelled")
+DELETABLE_JOB_STATES = (*RETRYABLE_JOB_STATES, "present")
 JSON_COLUMNS = {
     "profile_json": "profile",
     "sites_json": "sites",
@@ -599,6 +601,7 @@ class PluginStore:
         automatic: bool,
         allow_same_slot: bool = False,
         target_id: Optional[int] = None,
+        retry_job_id: Optional[int] = None,
     ) -> tuple[Optional[int], str]:
         if not media_keys:
             return None, "未识别到媒体版本键"
@@ -611,6 +614,18 @@ class PluginStore:
                 return None, "候选种子不存在或已刷新"
             if not candidate["eligible"]:
                 return None, candidate["rejection_reason"] or "候选种子不符合规则"
+            retry_job = None
+            if retry_job_id is not None:
+                retry_job = conn.execute(
+                    "SELECT id, candidate_key, status FROM download_jobs WHERE id=?",
+                    (int(retry_job_id),),
+                ).fetchone()
+                if not retry_job:
+                    return None, "重试任务不存在"
+                if retry_job["status"] not in RETRYABLE_JOB_STATES:
+                    return None, "只有失败或已取消的任务可以重试"
+                if retry_job["candidate_key"] != candidate_key:
+                    return None, "重试任务与候选种子不匹配"
             duplicate = conn.execute(
                 "SELECT id FROM download_jobs WHERE torrent_key=? AND status IN (?,?,?,?) LIMIT 1",
                 (candidate["torrent_key"], *DUPLICATE_JOB_STATES),
@@ -644,6 +659,8 @@ class PluginStore:
                         ):
                             return None, f"{media_key} 已有相同质量槽位在下载中"
 
+            if retry_job:
+                conn.execute("DELETE FROM download_jobs WHERE id=?", (retry_job["id"],))
             cursor = conn.execute(
                 """
                 INSERT INTO download_jobs (
@@ -689,15 +706,63 @@ class PluginStore:
             )
         return True, ""
 
+    def retryable_jobs(
+        self, job_ids: Optional[Iterable[int]] = None, all_failed: bool = False
+    ) -> list[dict]:
+        ids = list(dict.fromkeys(int(value) for value in job_ids or [] if int(value) > 0))
+        statuses = ("failed",) if all_failed else RETRYABLE_JOB_STATES
+        clauses = [f"status IN ({','.join('?' for _ in statuses)})"]
+        params: list[Any] = list(statuses)
+        if not all_failed:
+            if not ids:
+                return []
+            clauses.append(f"id IN ({','.join('?' for _ in ids)})")
+            params.extend(ids)
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM download_jobs WHERE {' AND '.join(clauses)} ORDER BY id DESC",
+                params,
+            ).fetchall()
+        return [_decode(row) for row in rows]
+
+    def delete_jobs(self, job_ids: Iterable[int]) -> dict:
+        ids = list(dict.fromkeys(int(value) for value in job_ids if int(value) > 0))
+        result = {"requested": len(ids), "deleted": 0, "blocked": 0, "missing": 0}
+        if not ids:
+            return result
+        marks = ",".join("?" for _ in ids)
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                f"SELECT id, status FROM download_jobs WHERE id IN ({marks})", ids
+            ).fetchall()
+            deletable = [row["id"] for row in rows if row["status"] in DELETABLE_JOB_STATES]
+            result["missing"] = len(ids) - len(rows)
+            result["blocked"] = len(rows) - len(deletable)
+            if deletable:
+                delete_marks = ",".join("?" for _ in deletable)
+                conn.execute(f"DELETE FROM download_jobs WHERE id IN ({delete_marks})", deletable)
+                result["deleted"] = len(deletable)
+        return result
+
     def list_jobs(self, page: int = 1, page_size: int = 50) -> dict:
         page, page_size = _page_values(page, page_size)
         with self.connect() as conn:
             total = conn.execute("SELECT COUNT(*) FROM download_jobs").fetchone()[0]
+            failed_count = conn.execute(
+                "SELECT COUNT(*) FROM download_jobs WHERE status='failed'"
+            ).fetchone()[0]
             rows = conn.execute(
                 "SELECT * FROM download_jobs ORDER BY id DESC LIMIT ? OFFSET ?",
                 (page_size, (page - 1) * page_size),
             ).fetchall()
-        return {"items": [_decode(row) for row in rows], "total": total, "page": page, "page_size": page_size}
+        return {
+            "items": [_decode(row) for row in rows],
+            "total": total,
+            "failed_count": failed_count,
+            "page": page,
+            "page_size": page_size,
+        }
 
     def reconcile_jobs(self) -> None:
         with self.connect() as conn:

@@ -427,11 +427,40 @@ class LibraryDownloadService:
                 results.append({"candidate_key": candidate_key, "success": False, "message": str(error)})
         return results
 
+    def retry_jobs(
+        self, job_ids: Optional[Iterable[int]] = None, all_failed: bool = False
+    ) -> dict:
+        requested_ids = list(dict.fromkeys(int(value) for value in job_ids or [] if int(value) > 0))
+        jobs = self.store.retryable_jobs(requested_ids, all_failed=all_failed)
+        results = []
+        for job in jobs:
+            try:
+                results.append(self._dispatch_one(
+                    job["candidate_key"], automatic=False, retry_job_id=job["id"]
+                ))
+            except Exception as error:
+                logger.error(f"[联动EMBY库筛选下载] 重试任务 {job['id']} 失败：{error}")
+                results.append({
+                    "candidate_key": job["candidate_key"],
+                    "success": False,
+                    "message": str(error),
+                })
+        requested = len(jobs) if all_failed else len(requested_ids)
+        submitted = sum(1 for item in results if item.get("success"))
+        return {
+            "requested": requested,
+            "attempted": len(jobs),
+            "submitted": submitted,
+            "failed": requested - submitted,
+            "results": results,
+        }
+
     def _dispatch_one(
         self,
         candidate_key: str,
         automatic: bool,
         target_override: Optional[Mapping[str, Any]] = None,
+        retry_job_id: Optional[int] = None,
     ) -> dict:
         if not self.store.inventory_ready():
             return {
@@ -480,6 +509,7 @@ class LibraryDownloadService:
             automatic=automatic,
             allow_same_slot=bool(config.get("allow_same_slot")),
             target_id=target.get("id") if target else None,
+            retry_job_id=retry_job_id,
         )
         if not job_id:
             return {"candidate_key": candidate_key, "success": False, "message": reason}
