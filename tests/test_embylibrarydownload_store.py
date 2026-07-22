@@ -227,6 +227,42 @@ def test_list_jobs_cleans_old_failed_rows_when_same_torrent_is_active(tmp_path):
     assert [item["id"] for item in page["items"]] == [active_id]
 
 
+def test_obsolete_failed_jobs_are_cleaned_for_slot_and_version_cap(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    rows = [
+        candidate("slot-failed", "remux:dv:2160p"),
+        candidate("slot-active", "remux:dv:2160p"),
+        candidate("cap-failed", "webdl:sdr:1080p"),
+        candidate("cap-active", "encode:hdr10:2160p"),
+    ]
+    store.replace_candidates("pool", rows)
+    store.replace_inventory("Emby", [
+        inventory_row("cap-v1", "movie:themoviedb:502", "bluray:hdr10:2160p"),
+        inventory_row("cap-v2", "movie:themoviedb:502", "diy:dv:2160p"),
+    ])
+    failed_jobs = []
+    active_jobs = []
+    for key, media_key in (
+        ("slot-failed", "movie:themoviedb:501"),
+        ("slot-active", "movie:themoviedb:501"),
+        ("cap-failed", "movie:themoviedb:502"),
+        ("cap-active", "movie:themoviedb:502"),
+    ):
+        job_id, reason = store.reserve_download(key, [media_key], 3, None, False)
+        assert job_id and not reason
+        if key.endswith("failed"):
+            store.update_job(job_id, "failed", error="下载种子内容为空")
+            failed_jobs.append(job_id)
+        else:
+            store.update_job(job_id, "queued", download_id=f"download-{key}")
+            active_jobs.append(job_id)
+
+    cleaned = store.cleanup_obsolete_failed_jobs(max_versions=3, allow_same_slot=False)
+
+    assert cleaned == failed_jobs
+    assert [item["id"] for item in store.list_jobs()["items"]] == list(reversed(active_jobs))
+
+
 def test_target_scanned_pool_preference_is_saved_and_defaults_off(tmp_path):
     store = PluginStore(tmp_path / "state.db")
     target = store.save_target({"title": "Movie", "auto_download": True})

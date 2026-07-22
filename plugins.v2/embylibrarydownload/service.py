@@ -427,13 +427,21 @@ class LibraryDownloadService:
                 results.append({"candidate_key": candidate_key, "success": False, "message": str(error)})
         return results
 
+    def cleanup_obsolete_failed_jobs(
+        self, job_ids: Optional[Iterable[int]] = None
+    ) -> list[int]:
+        config = self.config()
+        return self.store.cleanup_obsolete_failed_jobs(
+            max_versions=max(1, min(3, _int(config.get("max_versions"), 3))),
+            allow_same_slot=bool(config.get("allow_same_slot")),
+            job_ids=job_ids,
+        )
+
     def retry_jobs(
         self, job_ids: Optional[Iterable[int]] = None, all_failed: bool = False
     ) -> dict:
         requested_ids = list(dict.fromkeys(int(value) for value in job_ids or [] if int(value) > 0))
-        cleaned_ids = self.store.cleanup_duplicate_failed_jobs(
-            None if all_failed else requested_ids
-        )
+        cleaned_ids = self.cleanup_obsolete_failed_jobs(None if all_failed else requested_ids)
         jobs = self.store.retryable_jobs(requested_ids, all_failed=all_failed)
         results = []
         for job in jobs:

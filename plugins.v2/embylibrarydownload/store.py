@@ -773,6 +773,74 @@ class PluginStore:
                 conn.execute(f"DELETE FROM download_jobs WHERE id IN ({marks})", cleaned_ids)
         return cleaned_ids
 
+    def cleanup_obsolete_failed_jobs(
+        self,
+        max_versions: int,
+        allow_same_slot: bool,
+        job_ids: Optional[Iterable[int]] = None,
+    ) -> list[int]:
+        ids = list(dict.fromkeys(int(value) for value in job_ids or [] if int(value) > 0))
+        clauses = ["status='failed'"]
+        params: list[Any] = []
+        if ids:
+            clauses.append(f"id IN ({','.join('?' for _ in ids)})")
+            params.extend(ids)
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            failed_jobs = conn.execute(
+                f"SELECT * FROM download_jobs WHERE {' AND '.join(clauses)} ORDER BY id",
+                params,
+            ).fetchall()
+            active_jobs = conn.execute(
+                "SELECT torrent_key, media_keys_json, quality_slot, status "
+                "FROM download_jobs WHERE status IN (?,?,?,?)",
+                DUPLICATE_JOB_STATES,
+            ).fetchall()
+            target_caps = {
+                int(row["id"]): max(1, min(3, int(row["desired_versions"])))
+                for row in conn.execute("SELECT id, desired_versions FROM targets").fetchall()
+            }
+            cleaned_ids = []
+            for job in failed_jobs:
+                if any(active["torrent_key"] == job["torrent_key"] for active in active_jobs):
+                    cleaned_ids.append(int(job["id"]))
+                    continue
+                media_keys = _loads(job["media_keys_json"], [])
+                cap = max(1, min(3, int(max_versions)))
+                if job["target_id"] is not None:
+                    cap = min(cap, target_caps.get(int(job["target_id"]), cap))
+                obsolete = any(
+                    self.inventory_version_count(media_key, conn) + sum(
+                        1 for active in active_jobs
+                        if active["status"] in ACTIVE_JOB_STATES
+                        and any(
+                            _keys_overlap(media_key, active_key)
+                            for active_key in _loads(active["media_keys_json"], [])
+                        )
+                    ) >= cap
+                    for media_key in media_keys
+                )
+                if not obsolete and job["quality_slot"] and not allow_same_slot:
+                    obsolete = any(
+                        _inventory_has_slot(conn, media_key, job["quality_slot"])
+                        or any(
+                            active["status"] in ACTIVE_JOB_STATES
+                            and active["quality_slot"] == job["quality_slot"]
+                            and any(
+                                _keys_overlap(media_key, active_key)
+                                for active_key in _loads(active["media_keys_json"], [])
+                            )
+                            for active in active_jobs
+                        )
+                        for media_key in media_keys
+                    )
+                if obsolete:
+                    cleaned_ids.append(int(job["id"]))
+            if cleaned_ids:
+                marks = ",".join("?" for _ in cleaned_ids)
+                conn.execute(f"DELETE FROM download_jobs WHERE id IN ({marks})", cleaned_ids)
+        return cleaned_ids
+
     def list_jobs(self, page: int = 1, page_size: int = 50) -> dict:
         page, page_size = _page_values(page, page_size)
         cleaned_count = len(self.cleanup_duplicate_failed_jobs())

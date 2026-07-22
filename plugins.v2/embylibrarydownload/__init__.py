@@ -61,7 +61,7 @@ class EmbyLibraryDownload(_PluginBase):
     plugin_name = "联动EMBY库筛选下载"
     plugin_desc = "以 Emby 实际媒体版本为准，按站点和质量规则搜索、限量并下载资源。"
     plugin_icon = "emby.png"
-    plugin_version = "0.3.3"
+    plugin_version = "0.3.4"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "embylibrarydownload_"
@@ -274,7 +274,10 @@ class EmbyLibraryDownload(_PluginBase):
         return self._start_task("downloads", self._dispatch_downloads, keys)
 
     def _api_jobs(self, page: int = 1, page_size: int = 50) -> dict:
-        return self._ok(self._require_store().list_jobs(page, page_size))
+        cleaned = len(self._require_service().cleanup_obsolete_failed_jobs())
+        result = self._require_store().list_jobs(page, page_size)
+        result["cleaned_count"] += cleaned
+        return self._ok(result)
 
     def _api_cancel_job(self, job_id: int) -> dict:
         success, message = self._require_store().cancel_job(job_id)
@@ -301,6 +304,7 @@ class EmbyLibraryDownload(_PluginBase):
         return self._start_task("job-retry", self._retry_jobs, job_ids, False)
 
     def _api_retry_failed_jobs(self) -> dict:
+        self._require_service().cleanup_obsolete_failed_jobs()
         if not self._require_store().retryable_jobs(all_failed=True):
             return self._error("当前没有失败任务")
         return self._start_task("job-retry", self._retry_jobs, [], True)
