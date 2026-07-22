@@ -682,6 +682,7 @@
     "description": "以Emby媒体库版本库存为准，按自定义站点、质量、动态范围和码率规则自动或批量下载，限制单个影片或每集最多三个版本。",
     "labels": "下载管理,媒体库,Emby",
     "version": "0.1.0",
+    "release": true,
     "icon": "emby.png",
     "author": "panyugoodboy",
     "level": 2,
