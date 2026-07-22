@@ -212,8 +212,10 @@ def prioritize_pool_candidates(
     """Move scanned pool candidates matching enabled target rules to the front."""
 
     active_targets = [
-        target for target in targets
+        item
+        for target in targets
         if target.get("enabled") and target.get("auto_download") and target.get("prefer_scanned_pool")
+        for item in expand_target_items(target)
     ]
     preferred, regular = [], []
     for candidate in candidates:
@@ -228,6 +230,23 @@ def prioritize_pool_candidates(
         ), None)
         (preferred if matched_target else regular).append((candidate, matched_target))
     return preferred + regular
+
+
+def expand_target_items(target: Mapping[str, Any]) -> list[dict]:
+    """Expand one recommendation-list target into media targets while keeping list rules."""
+
+    items = target.get("items") if isinstance(target.get("items"), list) else []
+    if not items:
+        return [dict(target)]
+    expanded = []
+    for position, item in enumerate(items):
+        if not isinstance(item, Mapping):
+            continue
+        merged = dict(target)
+        merged.update(item)
+        merged.update({"id": target.get("id"), "items": [], "target_position": position})
+        expanded.append(merged)
+    return expanded
 
 
 def matching_pool_candidates(

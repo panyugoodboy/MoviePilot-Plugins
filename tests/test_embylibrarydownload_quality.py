@@ -205,3 +205,29 @@ def test_recommended_target_matches_scanned_pool_by_original_title():
     }
 
     assert matching_pool_candidates([candidate], target, {}, [7]) == [candidate]
+
+
+def test_recommendation_list_item_is_prioritized_as_parent_target():
+    target = {
+        "id": 9, "title": "豆瓣电影 Top 250", "enabled": True,
+        "auto_download": True, "prefer_scanned_pool": True, "sites": [7], "profile": {},
+        "items": [
+            {"media_type": "movie", "title": "霸王别姬", "year": 1993},
+            {"media_type": "movie", "title": "The Shawshank Redemption", "year": 1994},
+        ],
+    }
+    regular = {
+        "candidate_key": "regular", "eligible": True, "title": "Other.Movie.2026.2160p.WEB-DL",
+        "year": 2026, "site_id": 7, "quality_type": "webdl", "quality_effect": "sdr",
+        "resolution": "2160p", "video_codec": "h265", "bitrate_mbps": 20,
+    }
+    matched = {
+        **regular, "candidate_key": "shawshank", "year": 1994,
+        "title": "The.Shawshank.Redemption.1994.2160p.WEB-DL",
+    }
+
+    ordered = prioritize_pool_candidates([regular, matched], [target], {}, [7])
+
+    assert [candidate["candidate_key"] for candidate, _ in ordered] == ["shawshank", "regular"]
+    assert ordered[0][1]["id"] == 9
+    assert ordered[0][1]["title"] == "The Shawshank Redemption"

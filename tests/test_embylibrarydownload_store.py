@@ -3,6 +3,8 @@ from pathlib import Path
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
 
 MODULE_PATH = Path(__file__).parents[1] / "plugins.v2" / "embylibrarydownload" / "store.py"
 SPEC = spec_from_file_location("embylibrarydownload_store", MODULE_PATH)
@@ -206,6 +208,45 @@ def test_target_list_marks_inventory_presence_and_missing_targets(tmp_path):
     assert targets[present["id"]]["inventory_count"] == 1
     assert targets[missing["id"]]["inventory_state"] == "missing"
     assert targets[missing["id"]]["in_library"] is False
+
+
+def test_recommendation_list_reports_each_poster_inventory_state(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    target = store.save_target({
+        "title": "豆瓣电影 Top 250",
+        "recommend_source": "recommend/douban_movie_top250",
+        "items": [
+            {
+                "media_type": "movie", "media_source": "themoviedb", "media_id": "10",
+                "title": "Present", "poster_url": "https://img.example/present.jpg", "year": 1993,
+            },
+            {
+                "media_type": "movie", "media_source": "themoviedb", "media_id": "20",
+                "title": "Missing", "poster_url": "https://img.example/missing.jpg", "year": 1994,
+            },
+        ],
+    })
+    store.replace_inventory("Emby", [inventory_row("present-v1", "movie:themoviedb:10")])
+    store.mark_inventory_synced()
+
+    result = {item["id"]: item for item in store.list_targets(with_inventory=True)}[target["id"]]
+
+    assert result["inventory_state"] == "partial"
+    assert result["item_count"] == 2
+    assert result["in_library_count"] == 1
+    assert result["missing_count"] == 1
+    assert [item["inventory_state"] for item in result["items"]] == ["present", "missing"]
+    assert result["items"][0]["poster_url"].endswith("present.jpg")
+
+
+def test_recommendation_list_requires_items(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+
+    with pytest.raises(ValueError, match="至少需要一部影片"):
+        store.save_target({
+            "title": "Empty List", "recommend_source": "recommend/douban_movie_top250",
+            "items": [],
+        })
 
 
 def test_target_inventory_title_fallback_uses_original_title_and_year(tmp_path):
@@ -420,3 +461,17 @@ def test_existing_target_database_adds_original_title_column(tmp_path):
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(targets)")}
 
     assert "original_title" in columns
+
+
+def test_existing_target_database_adds_recommendation_list_columns(tmp_path):
+    path = tmp_path / "state.db"
+    store = PluginStore(path)
+    with store.connect() as conn:
+        conn.execute("ALTER TABLE targets DROP COLUMN recommend_source")
+        conn.execute("ALTER TABLE targets DROP COLUMN items_json")
+
+    migrated = PluginStore(path)
+    with migrated.connect() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(targets)")}
+
+    assert {"recommend_source", "items_json"}.issubset(columns)

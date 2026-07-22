@@ -21,6 +21,7 @@ from app.schemas.types import MediaType
 from .quality import (
     apply_source_quality_type,
     classify_quality,
+    expand_target_items,
     is_series_title,
     matching_pool_candidates,
     merge_profile,
@@ -240,37 +241,53 @@ class LibraryDownloadService:
                 "message": f"成功添加 {len(downloads)} / {limit} 个下载",
             }
 
-    def process_target_from_pool(self, target_id: int) -> dict:
+    def process_target_from_pool(
+        self,
+        target_id: int,
+        allow_auto_download: bool = True,
+        download_limit: Optional[int] = None,
+    ) -> dict:
         """Match a newly created target against the existing pool and download it first."""
 
         target = self.store.get_target(target_id)
         if not target or not target.get("enabled"):
             raise RuntimeError("目标不存在或未启用")
         config = self.config()
-        matches = matching_pool_candidates(
-            self.store.pending_auto_candidates(),
-            target,
-            self._base_profile(),
-            _ids(config.get("sites")),
-        )
-        target_rows = []
-        for index, candidate in enumerate(matches):
+        pool_candidates = self.store.pending_auto_candidates()
+        matched_rows = []
+        seen = set()
+        for media_target in expand_target_items(target):
+            matches = matching_pool_candidates(
+                pool_candidates,
+                media_target,
+                self._base_profile(),
+                _ids(config.get("sites")),
+            )
+            for candidate in matches:
+                if candidate["candidate_key"] in seen:
+                    continue
+                seen.add(candidate["candidate_key"])
+                matched_rows.append((candidate, media_target))
+
+        target_rows, target_overrides = [], []
+        for index, (candidate, media_target) in enumerate(matched_rows):
             row = dict(candidate)
             row.update({
                 "candidate_key": hashlib.sha256(
                     f"target:{target_id}|{candidate['torrent_key']}".encode()
                 ).hexdigest(),
                 "target_id": target_id,
-                "quality_score": len(matches) - index,
+                "quality_score": len(matched_rows) - index,
                 "torrent_json": dumps(candidate.get("torrent") or {}),
                 "meta_json": dumps(candidate.get("meta") or {}),
                 "media_json": dumps(candidate.get("media") or {}),
                 "media_keys_json": dumps(candidate.get("media_keys") or []),
             })
             target_rows.append(row)
+            target_overrides.append(media_target)
         self.store.replace_candidates(f"target:{target_id}", target_rows)
 
-        auto_enabled = all((
+        auto_enabled = allow_auto_download and (download_limit is None or download_limit > 0) and all((
             config.get("auto_download"),
             config.get("pool_auto_download"),
             target.get("auto_download"),
@@ -285,14 +302,13 @@ class LibraryDownloadService:
                 "message": f"匹配到 {len(target_rows)} 个候选，自动下载开关未全部开启",
             }
 
-        limit = min(
-            max(1, min(50, _int(config.get("auto_batch_limit"), 5))),
-            max(1, min(3, _int(target.get("desired_versions"), 1))),
-        )
+        limit = max(1, min(50, _int(download_limit, _int(config.get("auto_batch_limit"), 5))))
+        if not target.get("items"):
+            limit = min(limit, max(1, min(3, _int(target.get("desired_versions"), 1))))
         downloads, skipped = [], []
-        for candidate in target_rows:
+        for candidate, media_target in zip(target_rows, target_overrides):
             result = self._dispatch_one(
-                candidate["candidate_key"], automatic=True, target_override=target
+                candidate["candidate_key"], automatic=True, target_override=media_target
             )
             if result.get("success"):
                 downloads.append(result)
@@ -321,6 +337,15 @@ class LibraryDownloadService:
         total, eligible, downloads = 0, 0, []
         remaining_auto = max(1, min(50, _int(self.config().get("auto_batch_limit"), 5)))
         for target in targets:
+            if target.get("items"):
+                result = self.process_target_from_pool(
+                    target["id"], allow_auto_download, remaining_auto
+                )
+                total += result["matched"]
+                eligible += result["matched"]
+                downloads.extend(result.get("downloads") or [])
+                remaining_auto -= result.get("submitted") or 0
+                continue
             profile = merge_profile(self._base_profile(), target.get("profile"))
             sites = _ids(target.get("sites")) or _ids(self.config().get("sites"))
             contexts = []

@@ -13,9 +13,9 @@ def test_manifest_matches_plugin_version_and_name():
     entry = manifest["EmbyLibraryDownload"]
 
     assert entry["name"] == "联动EMBY库筛选下载"
-    assert entry["version"] == "0.2.8"
+    assert entry["version"] == "0.2.9"
     assert entry["release"] is True
-    assert 'plugin_version = "0.2.8"' in source
+    assert 'plugin_version = "0.2.9"' in source
     assert '"auto_download_cron": ""' in source
     assert 'plugin_icon = "emby.png"' in source
 
@@ -27,8 +27,9 @@ def test_manifest_matches_plugin_version_and_name():
     assert 'self._search_targets, target_ids, False' in source
     assert 'process_target_from_pool' in source
     assert 'target-pool:' in source
-    assert '从自定义推荐选择' in page
-    assert 'target.poster_url' in page
+    assert '选择目标榜单' in page
+    assert '将整个榜单设为目标' in page
+    assert 'target.items || [target]' in page
     assert 'mdi-check-circle' in page
     assert 'auto_download: true, prefer_scanned_pool: true' in page
 

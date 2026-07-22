@@ -24,6 +24,7 @@ JSON_COLUMNS = {
     "quality_json": "quality",
     "media_keys_json": "media_keys",
     "baseline_json": "baseline",
+    "items_json": "items",
 }
 
 
@@ -103,6 +104,8 @@ class PluginStore:
                     title TEXT NOT NULL,
                     original_title TEXT,
                     poster_url TEXT,
+                    recommend_source TEXT,
+                    items_json TEXT NOT NULL DEFAULT '[]',
                     year INTEGER,
                     seasons_json TEXT NOT NULL DEFAULT '[]',
                     desired_versions INTEGER NOT NULL DEFAULT 1,
@@ -195,6 +198,10 @@ class PluginStore:
                 conn.execute("ALTER TABLE targets ADD COLUMN poster_url TEXT")
             if "original_title" not in target_columns:
                 conn.execute("ALTER TABLE targets ADD COLUMN original_title TEXT")
+            if "recommend_source" not in target_columns:
+                conn.execute("ALTER TABLE targets ADD COLUMN recommend_source TEXT")
+            if "items_json" not in target_columns:
+                conn.execute("ALTER TABLE targets ADD COLUMN items_json TEXT NOT NULL DEFAULT '[]'")
 
     def replace_inventory(self, server_name: str, rows: list[Mapping[str, Any]]) -> int:
         now = utcnow()
@@ -300,6 +307,33 @@ class PluginStore:
                     "SELECT 1 FROM plugin_state WHERE key='inventory_sync' AND value='success'"
                 ).fetchone())
                 for target in targets:
+                    media_items = target.get("items") or []
+                    if media_items:
+                        present_items = 0
+                        version_count = 0
+                        for item in media_items:
+                            count = self._target_inventory_count(conn, item) if ready else 0
+                            item.update({
+                                "inventory_state": "present" if count else "missing" if ready else "unknown",
+                                "inventory_count": count,
+                                "in_library": bool(count),
+                            })
+                            version_count += count
+                            present_items += int(bool(count))
+                        total_items = len(media_items)
+                        state = (
+                            "unknown" if not ready else "present" if present_items == total_items
+                            else "partial" if present_items else "missing"
+                        )
+                        target.update({
+                            "inventory_state": state,
+                            "inventory_count": version_count,
+                            "in_library": bool(total_items and present_items == total_items),
+                            "item_count": total_items,
+                            "in_library_count": present_items,
+                            "missing_count": total_items - present_items if ready else total_items,
+                        })
+                        continue
                     count = self._target_inventory_count(conn, target) if ready else 0
                     target.update({
                         "inventory_state": "present" if count else "missing" if ready else "unknown",
@@ -348,6 +382,12 @@ class PluginStore:
 
     def save_target(self, payload: Mapping[str, Any], target_id: Optional[int] = None) -> dict:
         now = utcnow()
+        items = [dict(item) for item in payload.get("items") or [] if isinstance(item, Mapping)]
+        recommend_source = _none(payload.get("recommend_source"))
+        if recommend_source and not items:
+            raise ValueError("推荐目标清单至少需要一部影片")
+        if len(items) > 1000:
+            raise ValueError("单个目标清单最多包含 1000 部影片")
         media_type = str(payload.get("media_type") or "movie").lower()
         if media_type not in {"movie", "tv"}:
             raise ValueError("媒体类型必须为 movie 或 tv")
@@ -359,6 +399,8 @@ class PluginStore:
             "title": str(payload.get("title") or "").strip(),
             "original_title": _none(payload.get("original_title")),
             "poster_url": _none(payload.get("poster_url")),
+            "recommend_source": recommend_source,
+            "items_json": dumps(items),
             "year": _int(payload.get("year")) or None,
             "seasons_json": dumps(payload.get("seasons") or []),
             "desired_versions": desired,
@@ -379,7 +421,8 @@ class PluginStore:
                     """
                     UPDATE targets SET media_type=:media_type, media_source=:media_source,
                         media_id=:media_id, title=:title, original_title=:original_title,
-                        poster_url=:poster_url,
+                        poster_url=:poster_url, recommend_source=:recommend_source,
+                        items_json=:items_json,
                         year=:year, seasons_json=:seasons_json,
                         desired_versions=:desired_versions, sites_json=:sites_json,
                         profile_json=:profile_json, save_path=:save_path,
@@ -397,12 +440,12 @@ class PluginStore:
                     """
                     INSERT INTO targets (
                         media_type, media_source, media_id, title, original_title,
-                        poster_url, year, seasons_json,
+                        poster_url, recommend_source, items_json, year, seasons_json,
                         desired_versions, sites_json, profile_json, save_path,
                         auto_download, prefer_scanned_pool, enabled, created_at, updated_at
                     ) VALUES (
                         :media_type, :media_source, :media_id, :title, :original_title,
-                        :poster_url, :year, :seasons_json,
+                        :poster_url, :recommend_source, :items_json, :year, :seasons_json,
                         :desired_versions, :sites_json, :profile_json, :save_path,
                         :auto_download, :prefer_scanned_pool, :enabled, :created_at, :updated_at
                     )
@@ -691,7 +734,7 @@ def _decode(row: sqlite3.Row) -> dict:
     result = dict(row)
     for source, target in JSON_COLUMNS.items():
         if source in result:
-            default = [] if source.endswith("keys_json") or source in {"sites_json", "seasons_json"} else {}
+            default = [] if source.endswith("keys_json") or source in {"sites_json", "seasons_json", "items_json"} else {}
             result[target] = _loads(result.pop(source), default)
     for key in ("enabled", "auto_download", "prefer_scanned_pool", "eligible", "automatic"):
         if key in result:
