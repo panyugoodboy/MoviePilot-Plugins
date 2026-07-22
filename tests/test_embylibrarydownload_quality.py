@@ -17,6 +17,8 @@ SPEC.loader.exec_module(quality_module)
 classify_quality = quality_module.classify_quality
 quality_matches = quality_module.quality_matches
 profile_score = quality_module.profile_score
+excluded_tv_reason = quality_module.excluded_tv_reason
+select_save_path = quality_module.select_save_path
 
 
 def test_classifies_diy_dolby_vision_and_bitrate():
@@ -80,3 +82,31 @@ def test_profile_order_and_bitrate_direction_control_ranking():
     profile = {"quality_types": ["remux"], "bitrate_order": "asc"}
     remux_high = classify_quality("Film.2024.2160p.Remux.DV.70Mbps")
     assert profile_score(remux_low, profile) > profile_score(remux_high, profile)
+
+
+def test_excluded_series_only_rejects_tv_and_checks_aliases():
+    assert excluded_tv_reason(
+        "Show.Name.S02E03.2160p.WEB-DL",
+        "别的剧, Show Name",
+        is_tv=True,
+    ) == "命中排除剧集：Show Name"
+    assert excluded_tv_reason(
+        "Localized.Title.S01.1080p",
+        "Original Series",
+        is_tv=True,
+        aliases=["Original Series"],
+    ) == "命中排除剧集：Original Series"
+    assert excluded_tv_reason("Show Name 2025 2160p", "Show Name", is_tv=False) == ""
+
+
+def test_save_path_precedence_is_target_then_quality_then_media_type():
+    config = {
+        "movie_save_path": "storage:/movies",
+        "tv_save_path": "storage:/tv",
+        "quality_save_paths": {"remux": "storage:/remux"},
+    }
+
+    assert select_save_path(config, "remux", "movie", "storage:/target") == "storage:/target"
+    assert select_save_path(config, "remux", "tv") == "storage:/remux"
+    assert select_save_path(config, "webdl", "tv") == "storage:/tv"
+    assert select_save_path(config, "webdl", "movie") == "storage:/movies"

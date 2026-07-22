@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from threading import Lock, Thread
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import Body
@@ -32,6 +32,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "allow_same_slot": False,
     "movie_save_path": "",
     "tv_save_path": "",
+    "quality_save_paths": {},
     "quality_types": ["bluray", "diy", "remux", "encode", "webdl"],
     "effects": ["dv", "hdr10plus", "hdr10", "hdr", "hlg", "sdr", "unknown"],
     "resolutions": ["2160p", "1080p"],
@@ -42,6 +43,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "reject_unknown_bitrate": False,
     "include_words": "",
     "exclude_words": "CAM,TS,TC,HDTS",
+    "excluded_tv_titles": "",
 }
 
 
@@ -49,7 +51,7 @@ class EmbyLibraryDownload(_PluginBase):
     plugin_name = "联动EMBY库筛选下载"
     plugin_desc = "以 Emby 实际媒体版本为准，按站点和质量规则搜索、限量并下载资源。"
     plugin_icon = "emby.png"
-    plugin_version = "0.1.0"
+    plugin_version = "0.2.0"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "embylibrarydownload_"
@@ -247,7 +249,7 @@ class EmbyLibraryDownload(_PluginBase):
         return self._require_service().search_targets(target_ids)
 
     def _refresh_pool(self) -> dict:
-        return self._require_service().refresh_pool()
+        return self._require_service().refresh_pool(lambda value: self._set_task_progress("pool", value))
 
     def _dispatch_downloads(self, candidate_keys: List[str]) -> dict:
         results = self._require_service().dispatch(candidate_keys, automatic=False)
@@ -272,7 +274,12 @@ class EmbyLibraryDownload(_PluginBase):
             task = self._tasks.get(name) or {}
             if task.get("status") == "running":
                 return self._error(f"{name} 任务正在运行")
-            self._tasks[name] = {"status": "running", "started_at": self._now(), "message": ""}
+            self._tasks[name] = {
+                "status": "running",
+                "started_at": self._now(),
+                "message": "",
+                "progress": {},
+            }
 
         def runner():
             try:
@@ -282,12 +289,14 @@ class EmbyLibraryDownload(_PluginBase):
                 logger.error(f"[联动EMBY库筛选下载] {name} 任务失败：{error}")
                 result, status, message = None, "failed", str(error)
             with self._task_lock:
+                progress = deepcopy(self._tasks.get(name, {}).get("progress") or {})
                 self._tasks[name] = {
                     "status": status,
                     "started_at": self._tasks.get(name, {}).get("started_at"),
                     "finished_at": self._now(),
                     "message": message,
                     "result": result,
+                    "progress": progress,
                 }
 
         Thread(target=runner, name=f"EmbyLibraryDownload-{name}", daemon=True).start()
@@ -298,14 +307,29 @@ class EmbyLibraryDownload(_PluginBase):
         result = deepcopy(DEFAULT_CONFIG)
         result.update(config or {})
         result["max_versions"] = max(1, min(3, cls._to_int(result.get("max_versions"), 3)))
-        result["browse_pages"] = max(1, min(20, cls._to_int(result.get("browse_pages"), 2)))
+        result["browse_pages"] = max(1, cls._to_int(result.get("browse_pages"), 2))
         result["auto_batch_limit"] = max(1, min(50, cls._to_int(result.get("auto_batch_limit"), 5)))
         for key in ("sites", "emby_servers", "quality_types", "effects", "resolutions", "video_codecs"):
             if not isinstance(result.get(key), list):
                 result[key] = []
         if not isinstance(result.get("emby_libraries"), dict):
             result["emby_libraries"] = {}
+        if not isinstance(result.get("quality_save_paths"), dict):
+            result["quality_save_paths"] = {}
+        result["quality_save_paths"] = {
+            key: str(result["quality_save_paths"].get(key) or "").strip()
+            for key in ("bluray", "diy", "remux", "encode", "webdl", "unknown")
+            if str(result["quality_save_paths"].get(key) or "").strip()
+        }
         return result
+
+    def _set_task_progress(self, name: str, value: Mapping[str, Any]) -> None:
+        with self._task_lock:
+            task = self._tasks.get(name)
+            if not task or task.get("status") != "running":
+                return
+            task["progress"] = deepcopy(dict(value))
+            task["message"] = str(value.get("message") or "")
 
     @staticmethod
     def _route(path: str, endpoint, methods: List[str], summary: str) -> Dict[str, Any]:

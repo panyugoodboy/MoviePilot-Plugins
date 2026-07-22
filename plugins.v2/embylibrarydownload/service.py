@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any, Callable, Iterable, Mapping, Optional
 from urllib.parse import urlencode
 
@@ -15,8 +16,21 @@ from app.helper.mediaserver import MediaServerHelper
 from app.log import logger
 from app.schemas.types import MediaType
 
-from .quality import classify_quality, merge_profile, profile_score, quality_matches
+from .quality import (
+    classify_quality,
+    excluded_tv_reason,
+    merge_profile,
+    profile_score,
+    quality_matches,
+    select_save_path,
+)
 from .store import PluginStore, dumps
+
+
+class _SinglePageSearchChain(SearchChain):
+    @staticmethod
+    def _get_search_resource_pages() -> int:
+        return 1
 
 
 class LibraryDownloadService:
@@ -86,27 +100,41 @@ class LibraryDownloadService:
         self.store.mark_inventory_synced()
         return {"versions": total, "servers": server_results}
 
-    def refresh_pool(self) -> dict:
+    def refresh_pool(self, progress: Optional[Callable[[Mapping[str, Any]], None]] = None) -> dict:
         config = self.config()
         sites = _ids(config.get("sites"))
         if not sites:
             raise RuntimeError("请先选择至少一个站点")
-        max_pages = max(1, min(20, _int(config.get("browse_pages"), 2)))
-        search = SearchChain()
+        max_pages = max(1, _int(config.get("browse_pages"), 2))
+        search = _SinglePageSearchChain()
         candidates: dict[str, dict] = {}
         errors = []
         profile = self._base_profile()
-        host_page_batch = max(1, search._get_search_resource_pages())
-        for upstream_page in range(0, max_pages, host_page_batch):
-            try:
-                contexts = search.search_by_title(title="", page=upstream_page, sites=sites) or []
-            except Exception as error:
-                errors.append(f"第 {upstream_page + 1} 页：{error}")
-                logger.error(f"[联动EMBY库筛选下载] 浏览站点第 {upstream_page + 1} 页失败：{error}")
-                continue
-            for context in contexts:
-                row = self._candidate_row(context, target_id=None, profile=profile)
-                candidates[row["candidate_key"]] = row
+        site_names = {site.id: site.name for site in SiteOper().list_order_by_pri() or [] if site}
+        total_pages = len(sites) * max_pages
+        completed_pages = 0
+        for site_index, site_id in enumerate(sites, start=1):
+            site_name = site_names.get(site_id) or f"站点 {site_id}"
+            for page_index in range(max_pages):
+                page = page_index + 1
+                self._report_pool_progress(
+                    progress, site_id, site_name, site_index, len(sites), page, max_pages,
+                    completed_pages, total_pages, candidates,
+                )
+                try:
+                    contexts = search.search_by_title(title="", page=page_index, sites=[site_id]) or []
+                except Exception as error:
+                    errors.append(f"{site_name} 第 {page} 页：{error}")
+                    logger.error(f"[联动EMBY库筛选下载] 浏览 {site_name} 第 {page} 页失败：{error}")
+                    contexts = []
+                for context in contexts:
+                    row = self._candidate_row(context, target_id=None, profile=profile)
+                    candidates[row["candidate_key"]] = row
+                completed_pages += 1
+                self._report_pool_progress(
+                    progress, site_id, site_name, site_index, len(sites), page, max_pages,
+                    completed_pages, total_pages, candidates,
+                )
         rows = list(candidates.values())
         self.store.replace_candidates("pool", rows)
 
@@ -195,19 +223,30 @@ class LibraryDownloadService:
             media = SearchChain().recognize_media(meta=meta)
         if not media:
             return {"candidate_key": candidate_key, "success": False, "message": "媒体信息识别失败，未提交下载"}
+        config = self.config()
+        excluded_reason = excluded_tv_reason(
+            candidate["title"],
+            config.get("excluded_tv_titles"),
+            is_tv=media.type == MediaType.TV,
+            aliases=self._title_aliases(meta, media),
+        )
+        if excluded_reason:
+            return {"candidate_key": candidate_key, "success": False, "message": excluded_reason}
         target = self.store.get_target(candidate["target_id"]) if candidate.get("target_id") else None
         media_keys = self._media_keys(media, meta, target)
         if not media_keys:
             return {"candidate_key": candidate_key, "success": False, "message": "无法建立媒体版本键"}
         self.store.update_candidate_identity(candidate_key, media.to_dict(), media_keys)
 
-        config = self.config()
         cap = max(1, min(3, _int(config.get("max_versions"), 3)))
         if target:
             cap = min(cap, max(1, _int(target.get("desired_versions"), 1)))
-        save_path = (target or {}).get("save_path")
-        if not save_path:
-            save_path = config.get("tv_save_path") if media.type == MediaType.TV else config.get("movie_save_path")
+        save_path = select_save_path(
+            config,
+            candidate.get("quality_type") or "unknown",
+            "tv" if media.type == MediaType.TV else "movie",
+            (target or {}).get("save_path"),
+        )
         job_id, reason = self.store.reserve_download(
             candidate_key=candidate_key,
             media_keys=media_keys,
@@ -252,6 +291,14 @@ class LibraryDownloadService:
         meta = context.meta_info or MetaInfo(title=torrent.title, subtitle=torrent.description)
         quality = classify_quality(torrent.title, meta)
         eligible, reason = quality_matches(torrent.title, quality, profile)
+        excluded_reason = excluded_tv_reason(
+            torrent.title,
+            self.config().get("excluded_tv_titles"),
+            is_tv=self._is_tv(meta, context.media_info),
+            aliases=self._title_aliases(meta, context.media_info),
+        )
+        if excluded_reason:
+            eligible, reason = False, excluded_reason
         torrent_data = torrent.to_dict()
         for secret in ("site_cookie", "site_ua"):
             torrent_data[secret] = None
@@ -304,6 +351,57 @@ class LibraryDownloadService:
             "include_words": config.get("include_words") or "",
             "exclude_words": config.get("exclude_words") or "",
         }
+
+    @staticmethod
+    def _report_pool_progress(
+        callback: Optional[Callable[[Mapping[str, Any]], None]],
+        site_id: int,
+        site_name: str,
+        site_index: int,
+        site_total: int,
+        page: int,
+        page_total: int,
+        completed_pages: int,
+        total_pages: int,
+        candidates: Mapping[str, Mapping[str, Any]],
+    ) -> None:
+        if not callback:
+            return
+        callback({
+            "site_id": site_id,
+            "site_name": site_name,
+            "site_index": site_index,
+            "site_total": site_total,
+            "page": page,
+            "page_total": page_total,
+            "completed_pages": completed_pages,
+            "total_pages": total_pages,
+            "percent": round(completed_pages * 100 / total_pages, 1) if total_pages else 0,
+            "found": len(candidates),
+            "eligible": sum(1 for row in candidates.values() if row.get("eligible")),
+            "message": f"{site_name} 第 {page}/{page_total} 页（站点 {site_index}/{site_total}）",
+        })
+
+    @staticmethod
+    def _is_tv(meta: Any, media: Optional[MediaInfo]) -> bool:
+        if media and media.type == MediaType.TV:
+            return True
+        if getattr(meta, "type", None) == MediaType.TV:
+            return True
+        if getattr(meta, "season_list", None) or getattr(meta, "episode_list", None):
+            return True
+        if _int(getattr(meta, "begin_season", None)):
+            return True
+        return bool(re.search(r"(?<![A-Z0-9])S\d{1,3}(?:E\d{1,4})?(?![A-Z0-9])", str(getattr(meta, "title", "") or ""), re.I))
+
+    @staticmethod
+    def _title_aliases(meta: Any, media: Optional[MediaInfo]) -> list[str]:
+        return [
+            str(getattr(value, name, "") or "")
+            for value in (meta, media)
+            if value
+            for name in ("name", "title", "cn_name", "en_name", "original_title")
+        ]
 
     @staticmethod
     def _restore_media(data: Mapping[str, Any]) -> Optional[MediaInfo]:

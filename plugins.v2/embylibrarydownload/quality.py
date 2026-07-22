@@ -219,6 +219,49 @@ def profile_score(quality: QualityInfo, profile: Mapping[str, Any]) -> int:
     return score or quality.score
 
 
+def excluded_tv_reason(
+    title: str,
+    excluded_titles: Any,
+    *,
+    is_tv: bool,
+    aliases: Optional[Iterable[Any]] = None,
+) -> str:
+    """Return a rejection reason when an episodic resource matches an excluded series."""
+
+    if not is_tv:
+        return ""
+    haystack = re.sub(
+        r"[\W_]+",
+        " ",
+        " ".join(str(value or "") for value in (title, *(aliases or []))).casefold(),
+    )
+    for excluded in _split_words(excluded_titles):
+        normalized = re.sub(r"[\W_]+", " ", excluded.casefold()).strip()
+        if normalized and normalized in haystack:
+            return f"命中排除剧集：{excluded}"
+    return ""
+
+
+def select_save_path(
+    config: Mapping[str, Any],
+    quality_type: str,
+    media_type: str,
+    target_save_path: Any = None,
+) -> str:
+    """Choose target, quality-specific, then media-type save path."""
+
+    target_path = str(target_save_path or "").strip()
+    if target_path:
+        return target_path
+    paths = config.get("quality_save_paths")
+    if isinstance(paths, Mapping):
+        quality_path = str(paths.get(quality_type) or "").strip()
+        if quality_path:
+            return quality_path
+    fallback_key = "tv_save_path" if str(media_type).lower() == "tv" else "movie_save_path"
+    return str(config.get(fallback_key) or "").strip()
+
+
 def _split_words(value: Any) -> list[str]:
     if isinstance(value, str):
         return [item.strip() for item in re.split(r"[,;\n]", value) if item.strip()]

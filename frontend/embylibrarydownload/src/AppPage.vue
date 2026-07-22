@@ -14,7 +14,7 @@ const tab = ref('overview')
 const loading = ref(false)
 const actionError = ref('')
 const bootstrap = reactive({
-  config: {},
+  config: { quality_save_paths: {} },
   options: { sites: [], emby_servers: [] },
   stats: {},
   tasks: {},
@@ -39,6 +39,8 @@ const candidateScopeLabel = computed(() => {
   return target ? `${target.title} 的候选资源` : '目标候选资源'
 })
 const hasRunningTask = computed(() => Object.values(bootstrap.tasks || {}).some(task => task.status === 'running'))
+const poolTask = computed(() => bootstrap.tasks?.pool || null)
+const poolProgress = computed(() => poolTask.value?.progress || {})
 const pageCandidateKeys = computed(() => candidates.items.map(item => item.candidate_key))
 const allPageSelected = computed(() => pageCandidateKeys.value.length > 0 && pageCandidateKeys.value.every(key => selectedCandidates.value.includes(key)))
 
@@ -66,6 +68,14 @@ const jobHeaders = [
   { title: '状态', key: 'status', width: 110 },
   { title: '来源', key: 'automatic', width: 90 },
   { title: '结果', key: 'result', minWidth: 180, sortable: false },
+]
+const qualityTypeItems = [
+  { title: '原盘', value: 'bluray' },
+  { title: 'DIY', value: 'diy' },
+  { title: 'Remux', value: 'remux' },
+  { title: 'Encode', value: 'encode' },
+  { title: 'WEB-DL', value: 'webdl' },
+  { title: '未知', value: 'unknown' },
 ]
 
 async function call(method, path, payload, params) {
@@ -164,7 +174,7 @@ function startPolling() {
       window.clearInterval(pollTimer)
       pollTimer = null
     }
-  }, 3000)
+  }, 1000)
 }
 
 async function refreshCurrentTab() {
@@ -426,8 +436,16 @@ onBeforeUnmount(() => {
         <section aria-labelledby="pool-title">
           <div class="section-heading">
             <div><h2 id="pool-title">{{ candidateScopeLabel }}</h2><p>固定每页 50 条，影片年份倒序；“全选”仅选择当前页，避免误下全站。</p></div>
-            <div class="button-row"><VBtn v-if="candidates.scope !== 'pool'" class="action-btn" variant="text" @click="candidates.scope='pool'; candidates.page=1; loadCandidates()">返回全站</VBtn><VBtn class="action-btn" color="primary" prepend-icon="mdi-radar" @click="runTask('/pool/refresh', '站点种子池刷新已开始')">刷新全站种子</VBtn></div>
+            <div class="button-row"><VBtn v-if="candidates.scope !== 'pool'" class="action-btn" variant="text" @click="candidates.scope='pool'; candidates.page=1; loadCandidates()">返回全站</VBtn><VBtn class="action-btn" color="primary" prepend-icon="mdi-radar" :loading="poolTask?.status === 'running'" @click="runTask('/pool/refresh', '站点种子池刷新已开始')">刷新全站种子</VBtn></div>
           </div>
+          <VAlert v-if="poolProgress.total_pages" :type="poolTask?.status === 'running' ? 'info' : poolTask?.status === 'failed' ? 'error' : 'success'" variant="tonal" class="mb-4">
+            <div class="d-flex justify-space-between flex-wrap ga-2 mb-2">
+              <strong>{{ poolTask?.status === 'running' ? poolTask.message : `上次刷新：${poolTask?.message || '已完成'}` }}</strong>
+              <span>已完成 {{ poolProgress.completed_pages || 0 }} / {{ poolProgress.total_pages || 0 }} 页</span>
+            </div>
+            <VProgressLinear :model-value="poolProgress.percent || 0" color="primary" height="8" rounded />
+            <small v-if="poolProgress.total_pages">已发现 {{ poolProgress.found || 0 }} 个候选，其中 {{ poolProgress.eligible || 0 }} 个符合规则</small>
+          </VAlert>
           <div class="filter-row">
             <VTextField v-model="candidates.keyword" label="搜索种子标题" prepend-inner-icon="mdi-magnify" clearable hide-details @keyup.enter="loadCandidates" />
             <VSelect v-model="candidates.site_id" label="站点" :items="siteItems" item-title="name" item-value="id" clearable hide-details />
@@ -481,17 +499,24 @@ onBeforeUnmount(() => {
               <VSwitch v-model="bootstrap.config.allow_same_slot" label="允许相同质量槽位" color="primary" hide-details />
               <VSelect v-model="bootstrap.config.max_versions" label="每个影片/每集最多版本" :items="[1,2,3]" />
               <VTextField v-model.number="bootstrap.config.auto_batch_limit" type="number" min="1" max="50" label="每轮自动下载上限" />
-              <VTextField v-model.number="bootstrap.config.browse_pages" type="number" min="1" max="20" label="每站刷新页数" />
+              <VTextField v-model.number="bootstrap.config.browse_pages" type="number" min="1" label="每站刷新页数" hint="不设上限；每站逐页刷新并显示真实进度" persistent-hint />
               <VSelect v-model="bootstrap.config.sites" label="搜索站点" :items="siteItems" item-title="name" item-value="id" multiple chips closable-chips />
               <VSelect v-model="bootstrap.config.emby_servers" label="Emby 服务" :items="serverItems" multiple chips closable-chips />
               <VTextField v-model="bootstrap.config.movie_save_path" label="电影下载保存路径" hint="留空使用 MoviePilot 默认目录；支持 storage:/path" persistent-hint />
               <VTextField v-model="bootstrap.config.tv_save_path" label="电视剧下载保存路径" hint="留空使用 MoviePilot 默认目录；支持 storage:/path" persistent-hint />
             </VCardText></VCard>
 
+            <VCard variant="outlined" class="settings-card"><VCardTitle>质量保存路径</VCardTitle><VCardText>
+              <p class="field-help">优先级：目标专用路径 &gt; 质量路径 &gt; 电影/电视剧默认路径。留空即继续使用后一级。</p>
+              <div class="settings-grid">
+                <VTextField v-for="item in qualityTypeItems" :key="item.value" v-model="bootstrap.config.quality_save_paths[item.value]" :label="`${item.title} 保存路径`" placeholder="storage:/path" />
+              </div>
+            </VCardText></VCard>
+
             <VCard variant="outlined" class="settings-card"><VCardTitle>Emby 媒体库</VCardTitle><VCardText><p class="field-help">每个服务留空表示同步全部媒体库。</p><div class="settings-grid"><VSelect v-for="server in bootstrap.options.emby_servers" :key="server.name" :model-value="bootstrap.config.emby_libraries?.[server.name] || []" :label="`${server.name} 媒体库`" :items="server.libraries" item-title="name" item-value="id" multiple chips closable-chips @update:model-value="value => setServerLibraries(server.name, value)" /></div></VCardText></VCard>
 
             <VCard variant="outlined" class="settings-card"><VCardTitle>质量筛选</VCardTitle><VCardText class="settings-grid">
-              <VSelect v-model="bootstrap.config.quality_types" label="质量类型（选择顺序即优先级）" :items="[{title:'原盘',value:'bluray'},{title:'DIY',value:'diy'},{title:'Remux',value:'remux'},{title:'Encode',value:'encode'},{title:'WEB-DL',value:'webdl'},{title:'未知',value:'unknown'}]" multiple chips closable-chips />
+              <VSelect v-model="bootstrap.config.quality_types" label="质量类型（选择顺序即优先级）" :items="qualityTypeItems" multiple chips closable-chips />
               <VSelect v-model="bootstrap.config.effects" label="动态范围（选择顺序即优先级）" :items="[{title:'Dolby Vision',value:'dv'},{title:'HDR10+',value:'hdr10plus'},{title:'HDR10',value:'hdr10'},{title:'HDR',value:'hdr'},{title:'HLG',value:'hlg'},{title:'SDR',value:'sdr'},{title:'未知',value:'unknown'}]" multiple chips closable-chips />
               <VSelect v-model="bootstrap.config.resolutions" label="分辨率（选择顺序即优先级）" :items="['2160p','1080p','720p','unknown']" multiple chips closable-chips />
               <VSelect v-model="bootstrap.config.video_codecs" label="视频编码（留空不限）" :items="['h265','h264','av1','unknown']" multiple chips closable-chips />
@@ -501,6 +526,7 @@ onBeforeUnmount(() => {
               <VSwitch v-model="bootstrap.config.reject_unknown_bitrate" label="设置码率时拒绝未知码率" color="primary" hide-details />
               <VTextField v-model="bootstrap.config.include_words" label="必须包含关键词" hint="逗号分隔，全部命中才通过" persistent-hint />
               <VTextField v-model="bootstrap.config.exclude_words" label="排除关键词" hint="逗号分隔，任一命中即拒绝" persistent-hint />
+              <VTextField v-model="bootstrap.config.excluded_tv_titles" label="排除剧集（标题关键词）" hint="逗号、分号或换行分隔；只拒绝命中的剧集，不影响同名电影" persistent-hint />
             </VCardText></VCard>
 
             <VCard variant="outlined" class="settings-card"><VCardTitle>定时任务</VCardTitle><VCardText class="settings-grid">
