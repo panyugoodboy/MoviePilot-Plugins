@@ -17,7 +17,9 @@ SPEC.loader.exec_module(quality_module)
 classify_quality = quality_module.classify_quality
 quality_matches = quality_module.quality_matches
 profile_score = quality_module.profile_score
-excluded_tv_reason = quality_module.excluded_tv_reason
+apply_source_quality_type = quality_module.apply_source_quality_type
+is_series_title = quality_module.is_series_title
+tv_exclusion_reason = quality_module.tv_exclusion_reason
 select_save_path = quality_module.select_save_path
 
 
@@ -84,19 +86,26 @@ def test_profile_order_and_bitrate_direction_control_ranking():
     assert profile_score(remux_low, profile) > profile_score(remux_high, profile)
 
 
-def test_excluded_series_only_rejects_tv_and_checks_aliases():
-    assert excluded_tv_reason(
-        "Show.Name.S02E03.2160p.WEB-DL",
-        "别的剧, Show Name",
-        is_tv=True,
-    ) == "命中排除剧集：Show Name"
-    assert excluded_tv_reason(
-        "Localized.Title.S01.1080p",
-        "Original Series",
-        is_tv=True,
-        aliases=["Original Series"],
-    ) == "命中排除剧集：Original Series"
-    assert excluded_tv_reason("Show Name 2025 2160p", "Show Name", is_tv=False) == ""
+def test_tv_exclusion_switch_rejects_every_series_only_when_enabled():
+    assert tv_exclusion_reason(is_tv=True, enabled=True) == "已启用排除剧集"
+    assert tv_exclusion_reason(is_tv=False, enabled=True) == ""
+    assert tv_exclusion_reason(is_tv=True, enabled=False) == ""
+
+
+def test_category_source_is_authoritative_for_quality_type_and_slot():
+    detected = classify_quality("Film.2025.2160p.HEVC")
+    result = apply_source_quality_type(detected, "remux")
+
+    assert result.quality_type == "remux"
+    assert result.slot.startswith("remux:")
+    assert result.score > detected.score
+
+
+def test_series_titles_are_detected_without_rejecting_movie_titles():
+    assert is_series_title("Show.Name.S01E02.2160p.WEB-DL") is True
+    assert is_series_title("Show Name Season 2 Complete 1080p") is True
+    assert is_series_title("节目名称 第三季 全集") is True
+    assert is_series_title("Se7en.1995.2160p.Remux") is False
 
 
 def test_save_path_precedence_is_target_then_quality_then_media_type():

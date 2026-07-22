@@ -14,7 +14,7 @@ const tab = ref('overview')
 const loading = ref(false)
 const actionError = ref('')
 const bootstrap = reactive({
-  config: { quality_save_paths: {} },
+  config: { quality_save_paths: {}, exclude_tv: true },
   options: { sites: [], emby_servers: [] },
   stats: {},
   tasks: {},
@@ -435,16 +435,16 @@ onBeforeUnmount(() => {
       <VWindowItem value="pool">
         <section aria-labelledby="pool-title">
           <div class="section-heading">
-            <div><h2 id="pool-title">{{ candidateScopeLabel }}</h2><p>固定每页 50 条，影片年份倒序；“全选”仅选择当前页，避免误下全站。</p></div>
-            <div class="button-row"><VBtn v-if="candidates.scope !== 'pool'" class="action-btn" variant="text" @click="candidates.scope='pool'; candidates.page=1; loadCandidates()">返回全站</VBtn><VBtn class="action-btn" color="primary" prepend-icon="mdi-radar" :loading="poolTask?.status === 'running'" @click="runTask('/pool/refresh', '站点种子池刷新已开始')">刷新全站种子</VBtn></div>
+            <div><h2 id="pool-title">{{ candidateScopeLabel }}</h2><p>按 UBits 的 WEB-DL、Remux、DIY 原盘、Encode 分类扫描全部页面；列表固定每页 50 条并按年份倒序。</p></div>
+            <div class="button-row"><VBtn v-if="candidates.scope !== 'pool'" class="action-btn" variant="text" @click="candidates.scope='pool'; candidates.page=1; loadCandidates()">返回全站</VBtn><VBtn class="action-btn" color="primary" prepend-icon="mdi-radar" :loading="poolTask?.status === 'running'" @click="runTask('/pool/refresh', 'UBits 电影分类刷新已开始')">刷新 UBits 电影分类</VBtn></div>
           </div>
-          <VAlert v-if="poolProgress.total_pages" :type="poolTask?.status === 'running' ? 'info' : poolTask?.status === 'failed' ? 'error' : 'success'" variant="tonal" class="mb-4">
+          <VAlert v-if="poolTask && (poolTask.status === 'running' || poolProgress.completed_pages)" :type="poolTask?.status === 'running' ? 'info' : poolTask?.status === 'failed' ? 'error' : 'success'" variant="tonal" class="mb-4">
             <div class="d-flex justify-space-between flex-wrap ga-2 mb-2">
               <strong>{{ poolTask?.status === 'running' ? poolTask.message : `上次刷新：${poolTask?.message || '已完成'}` }}</strong>
-              <span>已完成 {{ poolProgress.completed_pages || 0 }} / {{ poolProgress.total_pages || 0 }} 页</span>
+              <span>已扫描 {{ poolProgress.completed_pages || 0 }} 页 · 完成 {{ poolProgress.completed_sources || 0 }} / {{ poolProgress.total_sources || 4 }} 个分类</span>
             </div>
             <VProgressLinear :model-value="poolProgress.percent || 0" color="primary" height="8" rounded />
-            <small v-if="poolProgress.total_pages">已发现 {{ poolProgress.found || 0 }} 个候选，其中 {{ poolProgress.eligible || 0 }} 个符合规则</small>
+            <small>已发现 {{ poolProgress.found || 0 }} 个候选，其中 {{ poolProgress.eligible || 0 }} 个符合规则</small>
           </VAlert>
           <div class="filter-row">
             <VTextField v-model="candidates.keyword" label="搜索种子标题" prepend-inner-icon="mdi-magnify" clearable hide-details @keyup.enter="loadCandidates" />
@@ -499,8 +499,7 @@ onBeforeUnmount(() => {
               <VSwitch v-model="bootstrap.config.allow_same_slot" label="允许相同质量槽位" color="primary" hide-details />
               <VSelect v-model="bootstrap.config.max_versions" label="每个影片/每集最多版本" :items="[1,2,3]" />
               <VTextField v-model.number="bootstrap.config.auto_batch_limit" type="number" min="1" max="50" label="每轮自动下载上限" />
-              <VTextField v-model.number="bootstrap.config.browse_pages" type="number" min="1" label="每站刷新页数" hint="不设上限；每站逐页刷新并显示真实进度" persistent-hint />
-              <VSelect v-model="bootstrap.config.sites" label="搜索站点" :items="siteItems" item-title="name" item-value="id" multiple chips closable-chips />
+              <VSelect v-model="bootstrap.config.sites" label="搜索站点（种子池仅使用 UBits）" :items="siteItems" item-title="name" item-value="id" multiple chips closable-chips />
               <VSelect v-model="bootstrap.config.emby_servers" label="Emby 服务" :items="serverItems" multiple chips closable-chips />
               <VTextField v-model="bootstrap.config.movie_save_path" label="电影下载保存路径" hint="留空使用 MoviePilot 默认目录；支持 storage:/path" persistent-hint />
               <VTextField v-model="bootstrap.config.tv_save_path" label="电视剧下载保存路径" hint="留空使用 MoviePilot 默认目录；支持 storage:/path" persistent-hint />
@@ -526,7 +525,7 @@ onBeforeUnmount(() => {
               <VSwitch v-model="bootstrap.config.reject_unknown_bitrate" label="设置码率时拒绝未知码率" color="primary" hide-details />
               <VTextField v-model="bootstrap.config.include_words" label="必须包含关键词" hint="逗号分隔，全部命中才通过" persistent-hint />
               <VTextField v-model="bootstrap.config.exclude_words" label="排除关键词" hint="逗号分隔，任一命中即拒绝" persistent-hint />
-              <VTextField v-model="bootstrap.config.excluded_tv_titles" label="排除剧集（标题关键词）" hint="逗号、分号或换行分隔；只拒绝命中的剧集，不影响同名电影" persistent-hint />
+              <div><VSwitch v-model="bootstrap.config.exclude_tv" label="排除所有剧集（仅保留电影）" color="primary" hide-details /><p class="field-help">默认开启；候选入池和下载提交前都会再次拦截剧集。</p></div>
             </VCardText></VCard>
 
             <VCard variant="outlined" class="settings-card"><VCardTitle>定时任务</VCardTitle><VCardText class="settings-grid">

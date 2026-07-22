@@ -7,12 +7,19 @@ without a running MoviePilot instance.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Iterable, Mapping, Optional
 
 
 YEAR_RE = re.compile(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)")
 BITRATE_RE = re.compile(r"(?<!\d)(\d{1,3}(?:\.\d+)?)\s*(?:mbps|mb/s|m(?:bit)?/?s)(?!\w)", re.I)
+SERIES_TITLE_RE = re.compile(
+    r"(?<![A-Z0-9])S\d{1,3}(?:E\d{1,4})?(?![A-Z0-9])"
+    r"|\bSEASON[ ._-]*\d+\b|\bCOMPLETE[ ._-]+SERIES\b"
+    r"|第[一二三四五六七八九十百\d]+季|全集",
+    re.I,
+)
+QUALITY_TYPE_SCORES = {"diy": 600, "remux": 550, "bluray": 500, "webdl": 350, "encode": 300, "unknown": 0}
 
 
 def _text(*values: Any) -> str:
@@ -145,10 +152,9 @@ def classify_quality(
         bitrate = float(match.group(1)) if match else 0.0
 
     year = extract_year(title, _attr(meta, "year"))
-    type_scores = {"diy": 600, "remux": 550, "bluray": 500, "webdl": 350, "encode": 300, "unknown": 0}
     effect_scores = {"dv": 80, "hdr10plus": 70, "hdr10": 60, "hdr": 50, "hlg": 40, "sdr": 10, "unknown": 0}
     resolution_scores = {"2160p": 30, "1080p": 20, "720p": 10, "unknown": 0}
-    score = type_scores.get(quality_type, 0) + effect_scores.get(effect, 0) \
+    score = QUALITY_TYPE_SCORES.get(quality_type, 0) + effect_scores.get(effect, 0) \
         + resolution_scores.get(resolution, 0) + min(int(bitrate), 99)
     slot = f"{quality_type}:{effect}:{resolution}"
     return QualityInfo(quality_type, effect, resolution, video_codec, round(bitrate, 2), year, score, slot)
@@ -219,27 +225,27 @@ def profile_score(quality: QualityInfo, profile: Mapping[str, Any]) -> int:
     return score or quality.score
 
 
-def excluded_tv_reason(
-    title: str,
-    excluded_titles: Any,
-    *,
-    is_tv: bool,
-    aliases: Optional[Iterable[Any]] = None,
-) -> str:
-    """Return a rejection reason when an episodic resource matches an excluded series."""
+def apply_source_quality_type(quality: QualityInfo, quality_type: str) -> QualityInfo:
+    """Use the category URL as the authoritative quality type."""
 
-    if not is_tv:
-        return ""
-    haystack = re.sub(
-        r"[\W_]+",
-        " ",
-        " ".join(str(value or "") for value in (title, *(aliases or []))).casefold(),
+    normalized = str(quality_type or "").lower()
+    if normalized not in QUALITY_TYPE_SCORES or normalized == quality.quality_type:
+        return quality
+    score = quality.score - QUALITY_TYPE_SCORES.get(quality.quality_type, 0) + QUALITY_TYPE_SCORES[normalized]
+    return replace(
+        quality,
+        quality_type=normalized,
+        score=score,
+        slot=f"{normalized}:{quality.effect}:{quality.resolution}",
     )
-    for excluded in _split_words(excluded_titles):
-        normalized = re.sub(r"[\W_]+", " ", excluded.casefold()).strip()
-        if normalized and normalized in haystack:
-            return f"命中排除剧集：{excluded}"
-    return ""
+
+
+def tv_exclusion_reason(*, is_tv: bool, enabled: bool) -> str:
+    return "已启用排除剧集" if enabled and is_tv else ""
+
+
+def is_series_title(title: str) -> bool:
+    return bool(SERIES_TITLE_RE.search(str(title or "")))
 
 
 def select_save_path(

@@ -27,7 +27,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "auto_download": False,
     "pool_auto_download": False,
     "auto_batch_limit": 5,
-    "browse_pages": 2,
     "max_versions": 3,
     "allow_same_slot": False,
     "movie_save_path": "",
@@ -43,7 +42,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "reject_unknown_bitrate": False,
     "include_words": "",
     "exclude_words": "CAM,TS,TC,HDTS",
-    "excluded_tv_titles": "",
+    "exclude_tv": True,
 }
 
 
@@ -51,7 +50,7 @@ class EmbyLibraryDownload(_PluginBase):
     plugin_name = "联动EMBY库筛选下载"
     plugin_desc = "以 Emby 实际媒体版本为准，按站点和质量规则搜索、限量并下载资源。"
     plugin_icon = "emby.png"
-    plugin_version = "0.2.0"
+    plugin_version = "0.2.1"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "embylibrarydownload_"
@@ -307,8 +306,10 @@ class EmbyLibraryDownload(_PluginBase):
         result = deepcopy(DEFAULT_CONFIG)
         result.update(config or {})
         result["max_versions"] = max(1, min(3, cls._to_int(result.get("max_versions"), 3)))
-        result["browse_pages"] = max(1, cls._to_int(result.get("browse_pages"), 2))
         result["auto_batch_limit"] = max(1, min(50, cls._to_int(result.get("auto_batch_limit"), 5)))
+        result["exclude_tv"] = cls._to_bool(result.get("exclude_tv"), True)
+        result.pop("browse_pages", None)
+        result.pop("excluded_tv_titles", None)
         for key in ("sites", "emby_servers", "quality_types", "effects", "resolutions", "video_codecs"):
             if not isinstance(result.get(key), list):
                 result[key] = []
@@ -354,3 +355,11 @@ class EmbyLibraryDownload(_PluginBase):
             return int(value)
         except (TypeError, ValueError):
             return default
+
+    @staticmethod
+    def _to_bool(value: Any, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() not in {"0", "false", "no", "off", ""}
+        return default if value is None else bool(value)

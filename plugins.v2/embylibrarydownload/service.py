@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from typing import Any, Callable, Iterable, Mapping, Optional
 from urllib.parse import urlencode
 
@@ -13,24 +12,22 @@ from app.core.context import Context, MediaInfo, TorrentInfo
 from app.core.metainfo import MetaInfo
 from app.db.site_oper import SiteOper
 from app.helper.mediaserver import MediaServerHelper
+from app.helper.sites import SitesHelper
 from app.log import logger
 from app.schemas.types import MediaType
 
 from .quality import (
+    apply_source_quality_type,
     classify_quality,
-    excluded_tv_reason,
+    is_series_title,
     merge_profile,
     profile_score,
     quality_matches,
     select_save_path,
+    tv_exclusion_reason,
 )
+from .sources import UBITS_MOVIE_SOURCES, build_category_site, is_ubits_domain, should_continue_pages
 from .store import PluginStore, dumps
-
-
-class _SinglePageSearchChain(SearchChain):
-    @staticmethod
-    def _get_search_resource_pages() -> int:
-        return 1
 
 
 class LibraryDownloadService:
@@ -102,39 +99,85 @@ class LibraryDownloadService:
 
     def refresh_pool(self, progress: Optional[Callable[[Mapping[str, Any]], None]] = None) -> dict:
         config = self.config()
-        sites = _ids(config.get("sites"))
-        if not sites:
+        selected_sites = set(_ids(config.get("sites")))
+        if not selected_sites:
             raise RuntimeError("请先选择至少一个站点")
-        max_pages = max(1, _int(config.get("browse_pages"), 2))
-        search = _SinglePageSearchChain()
+        sites = [
+            site for site in SitesHelper().get_indexers() or []
+            if _int(site.get("id")) in selected_sites and is_ubits_domain(site.get("domain"))
+        ]
+        if not sites:
+            raise RuntimeError("电影分类地址仅支持 UBits，请在搜索站点中选择 UBits")
+        search = SearchChain()
         candidates: dict[str, dict] = {}
         errors = []
         profile = self._base_profile()
-        site_names = {site.id: site.name for site in SiteOper().list_order_by_pri() or [] if site}
-        total_pages = len(sites) * max_pages
+        total_sources = len(sites) * len(UBITS_MOVIE_SOURCES)
+        completed_sources = 0
         completed_pages = 0
-        for site_index, site_id in enumerate(sites, start=1):
-            site_name = site_names.get(site_id) or f"站点 {site_id}"
-            for page_index in range(max_pages):
-                page = page_index + 1
-                self._report_pool_progress(
-                    progress, site_id, site_name, site_index, len(sites), page, max_pages,
-                    completed_pages, total_pages, candidates,
-                )
-                try:
-                    contexts = search.search_by_title(title="", page=page_index, sites=[site_id]) or []
-                except Exception as error:
-                    errors.append(f"{site_name} 第 {page} 页：{error}")
-                    logger.error(f"[联动EMBY库筛选下载] 浏览 {site_name} 第 {page} 页失败：{error}")
-                    contexts = []
-                for context in contexts:
-                    row = self._candidate_row(context, target_id=None, profile=profile)
-                    candidates[row["candidate_key"]] = row
-                completed_pages += 1
-                self._report_pool_progress(
-                    progress, site_id, site_name, site_index, len(sites), page, max_pages,
-                    completed_pages, total_pages, candidates,
-                )
+        for site in sites:
+            site_id = _int(site.get("id"))
+            site_name = str(site.get("name") or f"站点 {site_id}")
+            for source in UBITS_MOVIE_SOURCES:
+                category_site = build_category_site(site, source)
+                page_size = search.get_search_page_size(site=category_site, keyword="") or 100
+                page_index = 0
+                seen = set()
+                while True:
+                    page = page_index + 1
+                    self._report_pool_progress(
+                        progress, site_id, site_name, source.label, page, completed_pages,
+                        completed_sources, total_sources, candidates,
+                    )
+                    try:
+                        torrents = search.search_torrents(
+                            site=category_site,
+                            keyword="",
+                            mtype=MediaType.MOVIE,
+                            page=page_index,
+                        ) or []
+                    except Exception as error:
+                        errors.append(f"{site_name} {source.label} 第 {page} 页：{error}")
+                        logger.error(
+                            f"[联动EMBY库筛选下载] 浏览 {site_name} {source.label} 第 {page} 页失败：{error}"
+                        )
+                        torrents = []
+                    new_count = 0
+                    for torrent in torrents:
+                        torrent_key = _torrent_key(torrent.to_dict())
+                        if torrent_key in seen:
+                            continue
+                        seen.add(torrent_key)
+                        new_count += 1
+                        context = Context(
+                            meta_info=MetaInfo(title=torrent.title, subtitle=torrent.description),
+                            torrent_info=torrent,
+                            resource_source="search",
+                        )
+                        row = self._candidate_row(
+                            context,
+                            target_id=None,
+                            profile=profile,
+                            source_quality_type=source.quality_type,
+                        )
+                        candidates[row["candidate_key"]] = row
+                    completed_pages += 1
+                    self._report_pool_progress(
+                        progress, site_id, site_name, source.label, page, completed_pages,
+                        completed_sources, total_sources, candidates,
+                    )
+                    if not should_continue_pages(
+                        result_count=len(torrents),
+                        page_size=page_size,
+                        new_count=new_count,
+                    ):
+                        break
+                    page_index += 1
+                completed_sources += 1
+        self._report_pool_progress(
+            progress, 0, "UBits", "全部分类", 0, completed_pages,
+            completed_sources, total_sources, candidates, finished=True,
+        )
         rows = list(candidates.values())
         self.store.replace_candidates("pool", rows)
 
@@ -224,11 +267,9 @@ class LibraryDownloadService:
         if not media:
             return {"candidate_key": candidate_key, "success": False, "message": "媒体信息识别失败，未提交下载"}
         config = self.config()
-        excluded_reason = excluded_tv_reason(
-            candidate["title"],
-            config.get("excluded_tv_titles"),
-            is_tv=media.type == MediaType.TV,
-            aliases=self._title_aliases(meta, media),
+        excluded_reason = tv_exclusion_reason(
+            is_tv=self._is_tv(meta, media, candidate["title"]),
+            enabled=bool(config.get("exclude_tv")),
         )
         if excluded_reason:
             return {"candidate_key": candidate_key, "success": False, "message": excluded_reason}
@@ -286,16 +327,20 @@ class LibraryDownloadService:
         self.store.update_job(job_id, "failed", error=error or "添加下载任务失败")
         return {"candidate_key": candidate_key, "job_id": job_id, "success": False, "message": error or "添加下载任务失败"}
 
-    def _candidate_row(self, context: Context, target_id: Optional[int], profile: Mapping[str, Any]) -> dict:
+    def _candidate_row(
+        self,
+        context: Context,
+        target_id: Optional[int],
+        profile: Mapping[str, Any],
+        source_quality_type: str = "",
+    ) -> dict:
         torrent = context.torrent_info
         meta = context.meta_info or MetaInfo(title=torrent.title, subtitle=torrent.description)
-        quality = classify_quality(torrent.title, meta)
+        quality = apply_source_quality_type(classify_quality(torrent.title, meta), source_quality_type)
         eligible, reason = quality_matches(torrent.title, quality, profile)
-        excluded_reason = excluded_tv_reason(
-            torrent.title,
-            self.config().get("excluded_tv_titles"),
-            is_tv=self._is_tv(meta, context.media_info),
-            aliases=self._title_aliases(meta, context.media_info),
+        excluded_reason = tv_exclusion_reason(
+            is_tv=self._is_tv(meta, context.media_info, torrent.title),
+            enabled=bool(self.config().get("exclude_tv")),
         )
         if excluded_reason:
             eligible, reason = False, excluded_reason
@@ -357,33 +402,32 @@ class LibraryDownloadService:
         callback: Optional[Callable[[Mapping[str, Any]], None]],
         site_id: int,
         site_name: str,
-        site_index: int,
-        site_total: int,
+        category: str,
         page: int,
-        page_total: int,
         completed_pages: int,
-        total_pages: int,
+        completed_sources: int,
+        total_sources: int,
         candidates: Mapping[str, Mapping[str, Any]],
+        finished: bool = False,
     ) -> None:
         if not callback:
             return
         callback({
             "site_id": site_id,
             "site_name": site_name,
-            "site_index": site_index,
-            "site_total": site_total,
+            "category": category,
             "page": page,
-            "page_total": page_total,
             "completed_pages": completed_pages,
-            "total_pages": total_pages,
-            "percent": round(completed_pages * 100 / total_pages, 1) if total_pages else 0,
+            "completed_sources": completed_sources,
+            "total_sources": total_sources,
+            "percent": 100 if finished else round(completed_sources * 100 / total_sources, 1),
             "found": len(candidates),
             "eligible": sum(1 for row in candidates.values() if row.get("eligible")),
-            "message": f"{site_name} 第 {page}/{page_total} 页（站点 {site_index}/{site_total}）",
+            "message": "四个电影分类已全部刷新" if finished else f"{site_name} · {category} · 第 {page} 页",
         })
 
     @staticmethod
-    def _is_tv(meta: Any, media: Optional[MediaInfo]) -> bool:
+    def _is_tv(meta: Any, media: Optional[MediaInfo], title: str = "") -> bool:
         if media and media.type == MediaType.TV:
             return True
         if getattr(meta, "type", None) == MediaType.TV:
@@ -392,16 +436,7 @@ class LibraryDownloadService:
             return True
         if _int(getattr(meta, "begin_season", None)):
             return True
-        return bool(re.search(r"(?<![A-Z0-9])S\d{1,3}(?:E\d{1,4})?(?![A-Z0-9])", str(getattr(meta, "title", "") or ""), re.I))
-
-    @staticmethod
-    def _title_aliases(meta: Any, media: Optional[MediaInfo]) -> list[str]:
-        return [
-            str(getattr(value, name, "") or "")
-            for value in (meta, media)
-            if value
-            for name in ("name", "title", "cn_name", "en_name", "original_title")
-        ]
+        return is_series_title(f"{title} {getattr(meta, 'title', '')}")
 
     @staticmethod
     def _restore_media(data: Mapping[str, Any]) -> Optional[MediaInfo]:
