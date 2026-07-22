@@ -431,6 +431,9 @@ class LibraryDownloadService:
         self, job_ids: Optional[Iterable[int]] = None, all_failed: bool = False
     ) -> dict:
         requested_ids = list(dict.fromkeys(int(value) for value in job_ids or [] if int(value) > 0))
+        cleaned_ids = self.store.cleanup_duplicate_failed_jobs(
+            None if all_failed else requested_ids
+        )
         jobs = self.store.retryable_jobs(requested_ids, all_failed=all_failed)
         results = []
         for job in jobs:
@@ -445,13 +448,14 @@ class LibraryDownloadService:
                     "success": False,
                     "message": str(error),
                 })
-        requested = len(jobs) if all_failed else len(requested_ids)
+        requested = len(jobs) + len(cleaned_ids) if all_failed else len(requested_ids)
         submitted = sum(1 for item in results if item.get("success"))
         return {
             "requested": requested,
             "attempted": len(jobs),
             "submitted": submitted,
-            "failed": requested - submitted,
+            "cleaned": len(cleaned_ids),
+            "failed": requested - submitted - len(cleaned_ids),
             "results": results,
         }
 

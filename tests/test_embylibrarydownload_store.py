@@ -202,6 +202,31 @@ def test_retryable_jobs_and_bulk_delete_only_use_safe_states(tmp_path):
     assert [item["id"] for item in store.list_jobs()["items"]] == [jobs[0]]
 
 
+def test_list_jobs_cleans_old_failed_rows_when_same_torrent_is_active(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    failed = candidate("failed-copy")
+    active = candidate("active-copy")
+    active["torrent_key"] = failed["torrent_key"]
+    store.replace_candidates("pool", [failed, active])
+
+    failed_id, reason = store.reserve_download(
+        "failed-copy", ["movie:themoviedb:401"], 3, None, False
+    )
+    assert failed_id and not reason
+    store.update_job(failed_id, "failed", error="下载种子内容为空")
+    active_id, reason = store.reserve_download(
+        "active-copy", ["movie:themoviedb:402"], 3, None, False
+    )
+    assert active_id and not reason
+    store.update_job(active_id, "queued", download_id="download-402")
+
+    page = store.list_jobs()
+
+    assert page["cleaned_count"] == 1
+    assert page["failed_count"] == 0
+    assert [item["id"] for item in page["items"]] == [active_id]
+
+
 def test_target_scanned_pool_preference_is_saved_and_defaults_off(tmp_path):
     store = PluginStore(tmp_path / "state.db")
     target = store.save_target({"title": "Movie", "auto_download": True})

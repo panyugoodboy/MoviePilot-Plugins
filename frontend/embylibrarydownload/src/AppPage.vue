@@ -581,7 +581,14 @@ function episodeLabel(item) {
 }
 
 function statusColor(status) {
-  return { success: 'success', queued: 'info', present: 'success', reserved: 'warning', running: 'primary', failed: 'error', cancelled: 'default' }[status] || 'default'
+  return { success: 'success', queued: 'info', downloading: 'primary', present: 'success', reserved: 'warning', running: 'primary', failed: 'error', cancelled: 'default' }[status] || 'default'
+}
+
+function statusLabel(status) {
+  return {
+    reserved: '已预留', queued: '已排队', downloading: '下载中', present: '已入库',
+    failed: '失败', cancelled: '已取消', running: '运行中', success: '已完成',
+  }[status] || status || '未知'
 }
 
 watch(tab, refreshCurrentTab)
@@ -660,7 +667,7 @@ onBeforeUnmount(() => {
             <VCardTitle>最近后台任务</VCardTitle>
             <VList lines="two">
               <VListItem v-for="(taskInfo, name) in bootstrap.tasks" :key="name" :title="name" :subtitle="taskInfo.message || taskInfo.started_at">
-                <template #append><VChip :color="statusColor(taskInfo.status)" size="small">{{ taskInfo.status }}</VChip></template>
+                <template #append><VChip :color="statusColor(taskInfo.status)" size="small">{{ statusLabel(taskInfo.status) }}</VChip></template>
               </VListItem>
             </VList>
           </VCard>
@@ -789,7 +796,7 @@ onBeforeUnmount(() => {
 
       <VWindowItem value="jobs">
         <section aria-labelledby="jobs-title">
-          <div class="section-heading"><div><h2 id="jobs-title">下载任务</h2><p>受控队列会把 reserved、queued、downloading 都计入版本上限。</p></div><div class="button-row"><VBtn class="action-btn" color="warning" variant="tonal" prepend-icon="mdi-restart-alert" :disabled="!jobs.failed_count || hasRunningTask" @click="retryAllFailedJobs">全部重试失败任务（{{ jobs.failed_count }}）</VBtn><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-refresh" @click="loadJobs">刷新任务</VBtn></div></div>
+          <div class="section-heading"><div><h2 id="jobs-title">下载任务</h2><p>已预留、已排队和下载中的任务都会计入版本上限；重复的旧失败记录会自动清理。</p></div><div class="button-row"><VBtn class="action-btn" color="warning" variant="tonal" prepend-icon="mdi-restart-alert" :disabled="!jobs.failed_count || hasRunningTask" @click="retryAllFailedJobs">全部重试失败任务（{{ jobs.failed_count }}）</VBtn><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-refresh" @click="loadJobs">刷新任务</VBtn></div></div>
           <div class="selection-bar">
             <VCheckbox :model-value="allPageJobsSelected" :indeterminate="selectedJobs.length > 0 && !allPageJobsSelected" hide-details label="当前页全选" @update:model-value="toggleJobPageSelection" />
             <span>已选 {{ selectedJobs.length }} / 当前页 {{ jobs.items.length }}</span>
@@ -798,12 +805,12 @@ onBeforeUnmount(() => {
             <VBtn class="action-btn" color="primary" prepend-icon="mdi-restart" :disabled="!selectedRetryableJobs.length || hasRunningTask" @click="retrySelectedJobs">重试已选（{{ selectedRetryableJobs.length }}）</VBtn>
           </div>
           <div class="desktop-table"><VDataTableServer v-model="selectedJobs" show-select item-value="id" :headers="jobHeaders" :items="jobs.items" :items-length="jobs.total" :items-per-page="50" :page="jobs.page" hover @update:page="value => { jobs.page=value; loadJobs() }">
-            <template #item.status="{ item }"><VChip :color="statusColor(item.status)" size="small">{{ item.status }}</VChip></template>
+            <template #item.status="{ item }"><VChip :color="statusColor(item.status)" size="small">{{ statusLabel(item.status) }}</VChip></template>
             <template #item.automatic="{ item }">{{ item.automatic ? '自动' : '手动' }}</template>
             <template #item.result="{ item }"><span :class="item.error ? 'text-error' : ''">{{ item.error || item.download_id || '等待中' }}</span></template>
             <template #bottom><VPagination v-model="jobs.page" :length="Math.max(1, Math.ceil(jobs.total / 50))" @update:model-value="loadJobs" /></template>
           </VDataTableServer></div>
-          <div class="mobile-list"><VCard v-for="item in jobs.items" :key="item.id" variant="outlined" class="mobile-card"><VCardText><VCheckbox v-model="selectedJobs" :value="item.id" hide-details :label="item.created_at" /><div class="mobile-title">{{ item.title }}</div><div class="chip-row"><VChip :color="statusColor(item.status)" size="small">{{ item.status }}</VChip><VChip size="small" variant="text">{{ item.automatic ? '自动' : '手动' }}</VChip></div><small>{{ item.error || item.download_id || item.created_at }}</small></VCardText></VCard></div>
+          <div class="mobile-list"><VCard v-for="item in jobs.items" :key="item.id" variant="outlined" class="mobile-card"><VCardText><VCheckbox v-model="selectedJobs" :value="item.id" hide-details :label="item.created_at" /><div class="mobile-title">{{ item.title }}</div><div class="chip-row"><VChip :color="statusColor(item.status)" size="small">{{ statusLabel(item.status) }}</VChip><VChip size="small" variant="text">{{ item.automatic ? '自动' : '手动' }}</VChip></div><small>{{ item.error || item.download_id || item.created_at }}</small></VCardText></VCard></div>
         </section>
       </VWindowItem>
 

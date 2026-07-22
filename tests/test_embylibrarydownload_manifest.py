@@ -14,9 +14,9 @@ def test_manifest_matches_plugin_version_and_name():
     entry = manifest["EmbyLibraryDownload"]
 
     assert entry["name"] == "联动EMBY库筛选下载"
-    assert entry["version"] == "0.3.2"
+    assert entry["version"] == "0.3.3"
     assert entry["release"] is True
-    assert 'plugin_version = "0.3.2"' in source
+    assert 'plugin_version = "0.3.3"' in source
     assert '"auto_download_cron": ""' in source
     assert '"proxy_enabled": True' in source
     assert 'plugin_icon = "emby.png"' in source
@@ -53,6 +53,8 @@ def test_manifest_matches_plugin_version_and_name():
     assert '/jobs/retry-failed' in source
     assert 'v-model="selectedJobs" show-select item-value="id"' in page
     assert '全部重试失败任务' in page
+    assert 'statusLabel(item.status)' in page
+    assert "failed: '失败'" in page
 
 
 def test_remote_entry_references_existing_build_assets():

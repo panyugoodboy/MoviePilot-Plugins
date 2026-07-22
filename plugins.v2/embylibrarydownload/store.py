@@ -745,8 +745,37 @@ class PluginStore:
                 result["deleted"] = len(deletable)
         return result
 
+    def cleanup_duplicate_failed_jobs(
+        self, job_ids: Optional[Iterable[int]] = None
+    ) -> list[int]:
+        ids = list(dict.fromkeys(int(value) for value in job_ids or [] if int(value) > 0))
+        clauses = ["failed.status='failed'"]
+        params: list[Any] = []
+        if ids:
+            clauses.append(f"failed.id IN ({','.join('?' for _ in ids)})")
+            params.extend(ids)
+        clauses.append(
+            "EXISTS (SELECT 1 FROM download_jobs AS active "
+            "WHERE active.torrent_key=failed.torrent_key "
+            f"AND active.status IN ({','.join('?' for _ in DUPLICATE_JOB_STATES)}))"
+        )
+        params.extend(DUPLICATE_JOB_STATES)
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                f"SELECT failed.id FROM download_jobs AS failed "
+                f"WHERE {' AND '.join(clauses)} ORDER BY failed.id",
+                params,
+            ).fetchall()
+            cleaned_ids = [int(row["id"]) for row in rows]
+            if cleaned_ids:
+                marks = ",".join("?" for _ in cleaned_ids)
+                conn.execute(f"DELETE FROM download_jobs WHERE id IN ({marks})", cleaned_ids)
+        return cleaned_ids
+
     def list_jobs(self, page: int = 1, page_size: int = 50) -> dict:
         page, page_size = _page_values(page, page_size)
+        cleaned_count = len(self.cleanup_duplicate_failed_jobs())
         with self.connect() as conn:
             total = conn.execute("SELECT COUNT(*) FROM download_jobs").fetchone()[0]
             failed_count = conn.execute(
@@ -760,6 +789,7 @@ class PluginStore:
             "items": [_decode(row) for row in rows],
             "total": total,
             "failed_count": failed_count,
+            "cleaned_count": cleaned_count,
             "page": page,
             "page_size": page_size,
         }
