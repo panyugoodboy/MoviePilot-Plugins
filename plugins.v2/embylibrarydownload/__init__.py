@@ -10,6 +10,7 @@ from fastapi import Body
 from app.log import logger
 from app.plugins import _PluginBase
 
+from .schedule import cron_preview
 from .service import LibraryDownloadService
 from .store import PluginStore
 
@@ -50,7 +51,7 @@ class EmbyLibraryDownload(_PluginBase):
     plugin_name = "联动EMBY库筛选下载"
     plugin_desc = "以 Emby 实际媒体版本为准，按站点和质量规则搜索、限量并下载资源。"
     plugin_icon = "emby.png"
-    plugin_version = "0.2.1"
+    plugin_version = "0.2.2"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "embylibrarydownload_"
@@ -172,6 +173,10 @@ class EmbyLibraryDownload(_PluginBase):
                 "options": self._require_service().options(),
                 "stats": self._require_store().stats(),
                 "tasks": deepcopy(self._tasks),
+                "cron_previews": {
+                    key: cron_preview(self._config.get(key), trigger_class=CronTrigger)
+                    for key in ("inventory_cron", "target_cron", "pool_cron")
+                },
             })
         except Exception as error:
             return self._error(error)

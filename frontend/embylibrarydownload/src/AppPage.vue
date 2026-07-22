@@ -18,6 +18,7 @@ const bootstrap = reactive({
   options: { sites: [], emby_servers: [] },
   stats: {},
   tasks: {},
+  cron_previews: {},
 })
 const inventory = reactive({ items: [], total: 0, page: 1, keyword: '', media_type: '' })
 const targets = ref([])
@@ -256,18 +257,34 @@ async function saveSettings() {
     if (response?.success === false) throw new Error(response.message || '保存失败')
     toast?.success?.('设置已保存并重新加载插件')
     await loadBootstrap(false)
+    return true
   } catch (error) {
     const message = error?.response?.data?.message || error?.message || '保存失败'
     actionError.value = message
     toast?.error?.(message)
+    return false
   } finally {
     loading.value = false
   }
 }
 
+async function runPoolOnce() {
+  if (!await saveSettings()) return
+  await runTask('/pool/refresh', '手动任务已开始')
+}
+
 function setServerLibraries(serverName, libraries) {
   if (!bootstrap.config.emby_libraries) bootstrap.config.emby_libraries = {}
   bootstrap.config.emby_libraries[serverName] = libraries
+}
+
+function cronPreview(key) {
+  const preview = bootstrap.cron_previews?.[key]
+  const expression = String(bootstrap.config?.[key] || '').trim()
+  if (!preview || preview.expression !== expression) {
+    return { valid: null, text: '保存后显示未来三次具体执行时间' }
+  }
+  return preview
 }
 
 function formatBytes(value) {
@@ -528,12 +545,18 @@ onBeforeUnmount(() => {
               <div><VSwitch v-model="bootstrap.config.exclude_tv" label="排除所有剧集（仅保留电影）" color="primary" hide-details /><p class="field-help">默认开启；候选入池和下载提交前都会再次拦截剧集。</p></div>
             </VCardText></VCard>
 
-            <VCard variant="outlined" class="settings-card"><VCardTitle>定时任务</VCardTitle><VCardText class="settings-grid">
-              <VTextField v-model="bootstrap.config.inventory_cron" label="Emby 同步 Cron" />
-              <VSwitch v-model="bootstrap.config.target_scan_enabled" label="启用目标定时搜索" color="primary" hide-details />
-              <VTextField v-model="bootstrap.config.target_cron" label="目标搜索 Cron" />
-              <VSwitch v-model="bootstrap.config.pool_scan_enabled" label="启用全站种子池定时刷新" color="primary" hide-details />
-              <VTextField v-model="bootstrap.config.pool_cron" label="种子池刷新 Cron" />
+            <VCard variant="outlined" class="settings-card"><VCardTitle>定时任务</VCardTitle><VCardText>
+              <div class="section-heading mb-4">
+                <div><strong>立即运行一轮种子池任务</strong><p class="field-help">先保存当前设置，再执行 UBits 四类全页扫描；若两个自动下载开关均已开启，扫描结束后会自动提交最多 {{ bootstrap.config.auto_batch_limit }} 个合格候选。</p></div>
+                <VBtn class="action-btn" variant="tonal" prepend-icon="mdi-play-circle-outline" :loading="loading || poolTask?.status === 'running'" :disabled="hasRunningTask || loading" @click="runPoolOnce">手动执行一次</VBtn>
+              </div>
+              <div class="settings-grid">
+                <VTextField v-model="bootstrap.config.inventory_cron" label="Emby 同步 Cron" :hint="cronPreview('inventory_cron').text" :error="cronPreview('inventory_cron').valid === false" persistent-hint />
+                <VSwitch v-model="bootstrap.config.target_scan_enabled" label="启用目标定时搜索" color="primary" hide-details />
+                <VTextField v-model="bootstrap.config.target_cron" label="目标搜索 Cron" :hint="cronPreview('target_cron').text" :error="cronPreview('target_cron').valid === false" persistent-hint />
+                <VSwitch v-model="bootstrap.config.pool_scan_enabled" label="启用全站种子池定时刷新" color="primary" hide-details />
+                <VTextField v-model="bootstrap.config.pool_cron" label="种子池刷新 Cron" :hint="cronPreview('pool_cron').text" :error="cronPreview('pool_cron').valid === false" persistent-hint />
+              </div>
             </VCardText></VCard>
             <div class="form-actions"><VBtn type="submit" class="action-btn" color="primary" prepend-icon="mdi-content-save">保存并应用</VBtn></div>
           </VForm>
