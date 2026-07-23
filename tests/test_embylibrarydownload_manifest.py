@@ -14,9 +14,9 @@ def test_manifest_matches_plugin_version_and_name():
     entry = manifest["EmbyLibraryDownload"]
 
     assert entry["name"] == "联动EMBY库筛选下载"
-    assert entry["version"] == "0.3.4"
+    assert entry["version"] == "0.3.5"
     assert entry["release"] is True
-    assert 'plugin_version = "0.3.4"' in source
+    assert 'plugin_version = "0.3.5"' in source
     assert '"auto_download_cron": ""' in source
     assert '"proxy_enabled": True' in source
     assert 'plugin_icon = "emby.png"' in source
@@ -56,6 +56,10 @@ def test_manifest_matches_plugin_version_and_name():
     assert 'statusLabel(item.status)' in page
     assert "failed: '失败'" in page
     assert 'cleanup_obsolete_failed_jobs' in source
+    assert 'class="page-brand"' in page
+    assert '--surface-soft:' in page
+    assert '@media (max-width: 390px)' in page
+    assert '@media (prefers-reduced-motion: reduce)' in page
 
 
 def test_remote_entry_references_existing_build_assets():
