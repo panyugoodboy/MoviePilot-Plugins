@@ -522,6 +522,34 @@ class PluginStore:
             row = conn.execute("SELECT * FROM candidates WHERE candidate_key=?", (candidate_key,)).fetchone()
         return _decode(row) if row else None
 
+    def apply_minimum_size_filters(
+        self, min_4k_bytes: int = 0, min_1080p_bytes: int = 0
+    ) -> int:
+        """Apply current size settings to already scanned candidates."""
+
+        thresholds = (
+            ("2160p", max(0, int(min_4k_bytes)), "4K"),
+            ("1080p", max(0, int(min_1080p_bytes)), "1080P"),
+        )
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE candidates SET eligible=1, rejection_reason=NULL, updated_at=? "
+                "WHERE rejection_reason LIKE '4K 体积低于最低设置%' "
+                "OR rejection_reason LIKE '1080P 体积低于最低设置%'",
+                (utcnow(),),
+            )
+            changed = 0
+            for resolution, threshold, label in thresholds:
+                if not threshold:
+                    continue
+                cursor = conn.execute(
+                    "UPDATE candidates SET eligible=0, rejection_reason=?, updated_at=? "
+                    "WHERE eligible=1 AND resolution=? AND COALESCE(size_bytes, 0)<?",
+                    (f"{label} 体积低于最低设置", utcnow(), resolution, threshold),
+                )
+                changed += cursor.rowcount
+        return changed
+
     def list_candidates(
         self,
         page: int = 1,

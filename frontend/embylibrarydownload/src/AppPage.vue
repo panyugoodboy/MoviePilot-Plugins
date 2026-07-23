@@ -14,7 +14,10 @@ const tab = ref('overview')
 const loading = ref(false)
 const actionError = ref('')
 const bootstrap = reactive({
-  config: { quality_save_paths: {}, exclude_tv: true, proxy_enabled: true },
+  config: {
+    quality_save_paths: {}, exclude_tv: true, proxy_enabled: true,
+    min_size_4k_gb: 0, min_size_1080p_gb: 0,
+  },
   options: { sites: [], emby_servers: [] },
   stats: {},
   tasks: {},
@@ -868,13 +871,15 @@ onBeforeUnmount(() => {
             </VCard>
 
             <VCard variant="outlined" class="settings-card">
-              <div class="settings-card-header"><div class="settings-card-icon"><VIcon icon="mdi-tune-vertical-variant" /></div><div><h3>质量筛选</h3><p>多选项的排列顺序就是自动选择优先级，越靠前越优先。</p></div></div>
+              <div class="settings-card-header"><div class="settings-card-icon"><VIcon icon="mdi-tune-vertical-variant" /></div><div><h3>质量筛选</h3><p>多选项的排列顺序就是自动选择优先级；最低体积按 GB 设置，0 表示不限制。</p></div></div>
               <VCardText>
                 <div class="settings-grid">
                   <VSelect v-model="bootstrap.config.quality_types" label="质量类型（选择顺序即优先级）" :items="qualityTypeItems" multiple chips closable-chips />
                   <VSelect v-model="bootstrap.config.effects" label="动态范围（选择顺序即优先级）" :items="[{title:'Dolby Vision',value:'dv'},{title:'HDR10+',value:'hdr10plus'},{title:'HDR10',value:'hdr10'},{title:'HDR',value:'hdr'},{title:'HLG',value:'hlg'},{title:'SDR',value:'sdr'},{title:'未知',value:'unknown'}]" multiple chips closable-chips />
                   <VSelect v-model="bootstrap.config.resolutions" label="分辨率（选择顺序即优先级）" :items="['2160p','1080p','720p','unknown']" multiple chips closable-chips />
                   <VSelect v-model="bootstrap.config.video_codecs" label="视频编码（留空不限）" :items="['h265','h264','av1','unknown']" multiple chips closable-chips />
+                  <VTextField v-model.number="bootstrap.config.min_size_4k_gb" type="number" min="0" step="0.1" label="4K 最低体积 GB（0 不限）" />
+                  <VTextField v-model.number="bootstrap.config.min_size_1080p_gb" type="number" min="0" step="0.1" label="1080P 最低体积 GB（0 不限）" />
                   <VTextField v-model.number="bootstrap.config.min_bitrate_mbps" type="number" min="0" label="最低码率 Mbps" />
                   <VTextField v-model.number="bootstrap.config.max_bitrate_mbps" type="number" min="0" label="最高码率 Mbps（0 不限）" />
                   <VSelect v-model="bootstrap.config.bitrate_order" label="同质量码率排序" :items="[{title:'高到低',value:'desc'},{title:'低到高',value:'asc'},{title:'不参与排序',value:'ignore'}]" />

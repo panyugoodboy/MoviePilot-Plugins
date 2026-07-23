@@ -68,6 +68,26 @@ def test_profile_filters_keywords_and_quality():
     assert quality_matches("Film.2024.2160p.WEB-DL.HDR10.18Mbps", rejected, profile)[0] is False
 
 
+def test_resolution_specific_minimum_sizes_use_gib_and_reject_unknown_size():
+    profile = {"min_size_4k_gb": 20, "min_size_1080p_gb": 8}
+    quality_4k = classify_quality("Film.2024.2160p.Remux.DV")
+    quality_1080p = classify_quality("Film.2024.1080p.Remux")
+    quality_720p = classify_quality("Film.2024.720p.WEB-DL")
+
+    assert quality_matches(
+        "Film.2024.2160p.Remux.DV", quality_4k, profile, size_bytes=20 * 1024 ** 3
+    ) == (True, "")
+    assert quality_matches(
+        "Film.2024.2160p.Remux.DV", quality_4k, profile, size_bytes=19 * 1024 ** 3
+    ) == (False, "4K 体积低于最低设置 20 GB")
+    assert quality_matches(
+        "Film.2024.1080p.Remux", quality_1080p, profile, size_bytes=0
+    ) == (False, "1080P 体积低于最低设置 8 GB")
+    assert quality_matches(
+        "Film.2024.720p.WEB-DL", quality_720p, profile, size_bytes=1
+    ) == (True, "")
+
+
 def test_short_exclude_word_does_not_reject_dts_or_atmos():
     profile = {"exclude_words": "CAM,TS,TC,HDTS"}
     quality = classify_quality("Film.2024.2160p.Remux.DV.DTS-HD.MA.Atmos")

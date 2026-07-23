@@ -142,6 +142,23 @@ def test_pool_candidates_are_filtered_and_counted_by_quality_category(tmp_path):
     }
 
 
+def test_minimum_size_settings_regrade_existing_scanned_candidates(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    row_4k = candidate("small-4k")
+    row_4k["size_bytes"] = 19 * 1024 ** 3
+    row_1080p = candidate("large-1080p")
+    row_1080p.update({"resolution": "1080p", "size_bytes": 9 * 1024 ** 3})
+    store.replace_candidates("pool", [row_4k, row_1080p])
+
+    assert store.apply_minimum_size_filters(20 * 1024 ** 3, 8 * 1024 ** 3) == 1
+    assert store.list_candidates()["total"] == 1
+    assert store.get_candidate("small-4k")["rejection_reason"].startswith("4K 体积低于最低设置")
+
+    store.apply_minimum_size_filters(0, 0)
+    assert store.list_candidates()["total"] == 2
+    assert store.get_candidate("small-4k")["rejection_reason"] is None
+
+
 def test_pending_auto_candidates_exclude_torrents_already_added_to_downloads(tmp_path):
     store = PluginStore(tmp_path / "state.db")
     first = candidate("first")

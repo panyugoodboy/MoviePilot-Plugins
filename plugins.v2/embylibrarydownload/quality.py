@@ -20,6 +20,7 @@ SERIES_TITLE_RE = re.compile(
     re.I,
 )
 QUALITY_TYPE_SCORES = {"diy": 600, "remux": 550, "bluray": 500, "webdl": 350, "encode": 300, "unknown": 0}
+GIB = 1024 ** 3
 
 
 def _text(*values: Any) -> str:
@@ -160,7 +161,13 @@ def classify_quality(
     return QualityInfo(quality_type, effect, resolution, video_codec, round(bitrate, 2), year, score, slot)
 
 
-def quality_matches(title: str, quality: QualityInfo, profile: Mapping[str, Any]) -> tuple[bool, str]:
+def quality_matches(
+    title: str,
+    quality: QualityInfo,
+    profile: Mapping[str, Any],
+    *,
+    size_bytes: Any = 0,
+) -> tuple[bool, str]:
     """Return whether a classified resource matches a configured profile."""
 
     include = [word.lower() for word in _split_words(profile.get("include_words"))]
@@ -192,6 +199,31 @@ def quality_matches(title: str, quality: QualityInfo, profile: Mapping[str, Any]
         return False, "码率高于上限"
     if (minimum or maximum) and not quality.bitrate_mbps and profile.get("reject_unknown_bitrate"):
         return False, "无法识别码率"
+    size_match, size_reason = minimum_size_matches(
+        quality.resolution, size_bytes, profile
+    )
+    if not size_match:
+        return False, size_reason
+    return True, ""
+
+
+def minimum_size_matches(
+    resolution: Any, size_bytes: Any, profile: Mapping[str, Any]
+) -> tuple[bool, str]:
+    """Apply resolution-specific minimum torrent size thresholds."""
+
+    settings = {
+        "2160p": ("min_size_4k_gb", "4K"),
+        "1080p": ("min_size_1080p_gb", "1080P"),
+    }
+    setting = settings.get(str(resolution or "").lower())
+    if not setting:
+        return True, ""
+    minimum_gb = _as_float(profile.get(setting[0]))
+    if minimum_gb <= 0:
+        return True, ""
+    if _as_float(size_bytes) < minimum_gb * GIB:
+        return False, f"{setting[1]} 体积低于最低设置 {minimum_gb:g} GB"
     return True, ""
 
 
@@ -295,7 +327,12 @@ def _pool_candidate_matches_target(
         return False
 
     quality = _candidate_quality(candidate)
-    if not quality_matches(str(candidate.get("title") or ""), quality, profile)[0]:
+    if not quality_matches(
+        str(candidate.get("title") or ""),
+        quality,
+        profile,
+        size_bytes=candidate.get("size_bytes"),
+    )[0]:
         return False
 
     target_media_id = str(target.get("media_id") or "").strip()

@@ -43,6 +43,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "video_codecs": [],
     "min_bitrate_mbps": 0,
     "max_bitrate_mbps": 0,
+    "min_size_4k_gb": 0,
+    "min_size_1080p_gb": 0,
     "bitrate_order": "desc",
     "reject_unknown_bitrate": False,
     "include_words": "",
@@ -61,7 +63,7 @@ class EmbyLibraryDownload(_PluginBase):
     plugin_name = "联动EMBY库筛选下载"
     plugin_desc = "以 Emby 实际媒体版本为准，按站点和质量规则搜索、限量并下载资源。"
     plugin_icon = "emby.png"
-    plugin_version = "0.3.5"
+    plugin_version = "0.3.6"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "embylibrarydownload_"
@@ -80,6 +82,10 @@ class EmbyLibraryDownload(_PluginBase):
         self._config = self._normalize_config(config or {})
         self._store = PluginStore(self.get_data_path() / "library_download.db")
         self._service = LibraryDownloadService(self._store, lambda: self._config)
+        self._store.apply_minimum_size_filters(
+            int(self._config["min_size_4k_gb"] * 1024 ** 3),
+            int(self._config["min_size_1080p_gb"] * 1024 ** 3),
+        )
 
     def get_state(self) -> bool:
         return bool(self._config.get("enabled"))
@@ -462,6 +468,8 @@ class EmbyLibraryDownload(_PluginBase):
         result.update(config or {})
         result["max_versions"] = max(1, min(3, cls._to_int(result.get("max_versions"), 3)))
         result["auto_batch_limit"] = max(1, min(50, cls._to_int(result.get("auto_batch_limit"), 5)))
+        result["min_size_4k_gb"] = max(0, cls._to_float(result.get("min_size_4k_gb"), 0))
+        result["min_size_1080p_gb"] = max(0, cls._to_float(result.get("min_size_1080p_gb"), 0))
         result["exclude_tv"] = cls._to_bool(result.get("exclude_tv"), True)
         result["proxy_enabled"] = cls._to_bool(result.get("proxy_enabled"), True)
         for key in (
@@ -514,6 +522,13 @@ class EmbyLibraryDownload(_PluginBase):
     def _to_int(value: Any, default: int) -> int:
         try:
             return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _to_float(value: Any, default: float) -> float:
+        try:
+            return float(value)
         except (TypeError, ValueError):
             return default
 

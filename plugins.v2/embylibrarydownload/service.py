@@ -25,6 +25,7 @@ from .quality import (
     is_series_title,
     matching_pool_candidates,
     merge_profile,
+    minimum_size_matches,
     prioritize_pool_candidates,
     profile_score,
     quality_matches,
@@ -499,6 +500,12 @@ class LibraryDownloadService:
         target = target_override or (
             self.store.get_target(candidate["target_id"]) if candidate.get("target_id") else None
         )
+        profile = merge_profile(self._base_profile(), (target or {}).get("profile"))
+        size_match, size_reason = minimum_size_matches(
+            candidate.get("resolution"), candidate.get("size_bytes"), profile
+        )
+        if not size_match:
+            return {"candidate_key": candidate_key, "success": False, "message": size_reason}
         media_keys = self._media_keys(media, meta, target)
         if not media_keys:
             return {"candidate_key": candidate_key, "success": False, "message": "无法建立媒体版本键"}
@@ -564,7 +571,10 @@ class LibraryDownloadService:
         torrent = context.torrent_info
         meta = context.meta_info or MetaInfo(title=torrent.title, subtitle=torrent.description)
         quality = apply_source_quality_type(classify_quality(torrent.title, meta), source_quality_type)
-        eligible, reason = quality_matches(torrent.title, quality, profile)
+        size_bytes = _int(torrent.size)
+        eligible, reason = quality_matches(
+            torrent.title, quality, profile, size_bytes=size_bytes
+        )
         excluded_reason = tv_exclusion_reason(
             is_tv=self._is_tv(meta, context.media_info, torrent.title),
             enabled=bool(self.config().get("exclude_tv")),
@@ -589,7 +599,7 @@ class LibraryDownloadService:
             "description": torrent.description or "",
             "page_url": torrent.page_url,
             "enclosure": torrent.enclosure,
-            "size_bytes": _int(torrent.size),
+            "size_bytes": size_bytes,
             "seeders": _int(torrent.seeders),
             "peers": _int(torrent.peers),
             "pubdate": torrent.pubdate,
@@ -618,6 +628,8 @@ class LibraryDownloadService:
             "video_codecs": config.get("video_codecs") or [],
             "min_bitrate_mbps": config.get("min_bitrate_mbps") or 0,
             "max_bitrate_mbps": config.get("max_bitrate_mbps") or 0,
+            "min_size_4k_gb": config.get("min_size_4k_gb") or 0,
+            "min_size_1080p_gb": config.get("min_size_1080p_gb") or 0,
             "reject_unknown_bitrate": bool(config.get("reject_unknown_bitrate")),
             "bitrate_order": config.get("bitrate_order") or "desc",
             "include_words": config.get("include_words") or "",
