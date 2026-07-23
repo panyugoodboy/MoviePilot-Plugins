@@ -10,17 +10,21 @@ from urllib.parse import urlencode
 
 from app.chain.download import DownloadChain
 from app.chain.search import SearchChain
+from app.chain.storage import StorageChain
 from app.core.context import Context, MediaInfo, TorrentInfo
 from app.core.metainfo import MetaInfo
 from app.db.site_oper import SiteOper
+from app.db.transferhistory_oper import TransferHistoryOper
 from app.helper.mediaserver import MediaServerHelper
 from app.helper.sites import SitesHelper
 from app.log import logger
+from app.schemas import FileItem
 from app.schemas.types import MediaType
 
 from .quality import (
     apply_source_quality_type,
     classify_quality,
+    estimate_bitrate_mbps,
     expand_target_items,
     is_series_title,
     matching_pool_candidates,
@@ -39,6 +43,7 @@ from .sources import (
     should_continue_pages,
     with_site_proxy,
 )
+from .replacement import cleanup_old_webdl_version, verify_new_webdl_version
 from .store import PluginStore, dumps
 
 
@@ -97,7 +102,6 @@ class LibraryDownloadService:
             raise RuntimeError("未找到已启用的 Emby 服务")
         self.store.prune_inventory_servers(services.keys())
 
-        total = 0
         server_results = []
         for name, service in services.items():
             instance = service.instance
@@ -117,14 +121,93 @@ class LibraryDownloadService:
                 items = self._fetch_emby_library(instance, library_id)
                 rows.extend(self._inventory_rows(name, library_id, items, instance))
             self.store.replace_inventory(name, rows)
-            total += len(rows)
             server_results.append({"server": name, "libraries": len(library_ids), "versions": len(rows)})
+        webdl_result = self._finalize_webdl_jobs(services)
         self.store.mark_inventory_synced()
         return {
-            "versions": total,
+            "versions": self.store.stats()["inventory_versions"],
             "servers": server_results,
             "targets": self.store.target_inventory_stats(),
+            "webdl_slots": webdl_result,
         }
+
+    def _finalize_webdl_jobs(self, services: Mapping[str, Any]) -> dict:
+        jobs = self.store.ready_webdl_jobs()
+        result = {"ready": len(jobs), "completed": 0, "cleaned_versions": 0, "failed": 0}
+        if not jobs:
+            return result
+        transfer_history = TransferHistoryOper()
+        storage = StorageChain()
+        for job in jobs:
+            try:
+                new_versions = []
+                for media_key in job.get("media_keys") or []:
+                    matches = [
+                        item for item in job.get("new_versions") or []
+                        if item.get("media_key") == media_key
+                    ]
+                    if matches:
+                        new_versions.append(max(
+                            matches, key=lambda item: float(item.get("bitrate_mbps") or 0)
+                        ))
+                verify_errors = []
+                for version in new_versions:
+                    verified, error = verify_new_webdl_version(
+                        version, transfer_history, storage, FileItem, job.get("download_id")
+                    )
+                    if not verified:
+                        verify_errors.append(error)
+                if not new_versions or verify_errors:
+                    error = "；".join(verify_errors) or "新 WEB-DL 版本尚未通过文件校验"
+                    self.store.fail_webdl_cleanup(job["id"], error)
+                    result["failed"] += 1
+                    continue
+
+                cleanup_errors = []
+                policy = job.get("webdl_policy") or {}
+                old_groups: dict[str, list[dict]] = {}
+                for old_version in policy.get("old_versions") or []:
+                    old_groups.setdefault(str(old_version.get("path") or ""), []).append(old_version)
+                for old_versions in old_groups.values():
+                    old_version = old_versions[0]
+                    cleaned, error = cleanup_old_webdl_version(
+                        old_version, transfer_history, storage, FileItem
+                    )
+                    if cleaned:
+                        for same_path_version in old_versions:
+                            self.store.mark_webdl_version_cleaned(
+                                job["id"], same_path_version["version_key"]
+                            )
+                            result["cleaned_versions"] += 1
+                    else:
+                        cleanup_errors.append(error)
+                if cleanup_errors:
+                    self.store.fail_webdl_cleanup(job["id"], "；".join(cleanup_errors))
+                    result["failed"] += 1
+                    continue
+
+                refresh_errors = []
+                for server_name in policy.get("server_names") or []:
+                    service = services.get(server_name)
+                    if not service or not hasattr(service.instance, "refresh_root_library"):
+                        refresh_errors.append(f"{server_name} 不支持刷新媒体库")
+                        continue
+                    if service.instance.refresh_root_library() is not True:
+                        refresh_errors.append(f"{server_name} 媒体库刷新失败")
+                if refresh_errors:
+                    self.store.fail_webdl_cleanup(job["id"], "；".join(refresh_errors))
+                    result["failed"] += 1
+                    continue
+
+                self.store.finish_webdl_job(job["id"])
+                result["completed"] += 1
+            except Exception as error:
+                logger.error(
+                    f"[联动EMBY库筛选下载] WEB-DL 升级任务 {job['id']} 清理失败：{error}"
+                )
+                self.store.fail_webdl_cleanup(job["id"], error)
+                result["failed"] += 1
+        return result
 
     def refresh_pool(self, progress: Optional[Callable[[Mapping[str, Any]], None]] = None) -> dict:
         config = self.config()
@@ -501,6 +584,13 @@ class LibraryDownloadService:
             self.store.get_target(candidate["target_id"]) if candidate.get("target_id") else None
         )
         profile = merge_profile(self._base_profile(), (target or {}).get("profile"))
+        if candidate.get("quality_type") == "webdl" and not candidate.get("bitrate_mbps"):
+            estimated_bitrate = estimate_bitrate_mbps(
+                candidate.get("size_bytes"), getattr(media, "runtime", None)
+            )
+            if estimated_bitrate:
+                candidate["bitrate_mbps"] = estimated_bitrate
+                self.store.update_candidate_bitrate(candidate_key, estimated_bitrate)
         size_match, size_reason = minimum_size_matches(
             candidate.get("resolution"), candidate.get("size_bytes"), profile
         )

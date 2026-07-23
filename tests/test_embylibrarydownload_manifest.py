@@ -14,9 +14,9 @@ def test_manifest_matches_plugin_version_and_name():
     entry = manifest["EmbyLibraryDownload"]
 
     assert entry["name"] == "联动EMBY库筛选下载"
-    assert entry["version"] == "0.3.6"
+    assert entry["version"] == "0.3.7"
     assert entry["release"] is True
-    assert 'plugin_version = "0.3.6"' in source
+    assert 'plugin_version = "0.3.7"' in source
     assert '"auto_download_cron": ""' in source
     assert '"proxy_enabled": True' in source
     assert 'plugin_icon = "emby.png"' in source
@@ -63,6 +63,9 @@ def test_manifest_matches_plugin_version_and_name():
     assert 'bootstrap.config.min_size_4k_gb' in page
     assert 'bootstrap.config.min_size_1080p_gb' in page
     assert 'minimum_size_matches' in service
+    assert "cleanup_failed: '旧版本清理失败'" in page
+    assert 'ready_webdl_jobs' in service
+    assert 'cleanup_old_webdl_version' in service
 
 
 def test_remote_entry_references_existing_build_assets():

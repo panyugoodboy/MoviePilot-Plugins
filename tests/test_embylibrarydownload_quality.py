@@ -17,6 +17,7 @@ SPEC.loader.exec_module(quality_module)
 classify_quality = quality_module.classify_quality
 quality_matches = quality_module.quality_matches
 profile_score = quality_module.profile_score
+estimate_bitrate_mbps = quality_module.estimate_bitrate_mbps
 apply_source_quality_type = quality_module.apply_source_quality_type
 is_series_title = quality_module.is_series_title
 tv_exclusion_reason = quality_module.tv_exclusion_reason
@@ -106,6 +107,30 @@ def test_profile_order_and_bitrate_direction_control_ranking():
     profile = {"quality_types": ["remux"], "bitrate_order": "asc"}
     remux_high = classify_quality("Film.2024.2160p.Remux.DV.70Mbps")
     assert profile_score(remux_low, profile) > profile_score(remux_high, profile)
+
+
+def test_webdl_resolution_slot_always_ranks_highest_bitrate_first():
+    low_preferred_effect = classify_quality("Film.2024.2160p.WEB-DL.DV.12Mbps")
+    high_other_effect = classify_quality("Film.2024.2160p.WEB-DL.HDR10 25Mbps")
+    profile = {
+        "quality_types": ["webdl"],
+        "resolutions": ["2160p", "1080p"],
+        "effects": ["dv", "hdr10"],
+        "bitrate_order": "asc",
+    }
+
+    assert profile_score(high_other_effect, profile) > profile_score(low_preferred_effect, profile)
+
+
+def test_bitrate_parser_does_not_read_hdr10_as_decimal_prefix():
+    quality = classify_quality("Film.2024.2160p.WEB-DL.HDR10.25Mbps")
+
+    assert quality.bitrate_mbps == 25
+
+
+def test_movie_size_and_runtime_produce_comparable_overall_bitrate():
+    assert estimate_bitrate_mbps(18_000_000_000, 120) == 20.0
+    assert estimate_bitrate_mbps(18_000_000_000, 0) == 0
 
 
 def test_tv_exclusion_switch_rejects_every_series_only_when_enabled():

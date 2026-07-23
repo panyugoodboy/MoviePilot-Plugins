@@ -12,7 +12,7 @@ from typing import Any, Iterable, Mapping, Optional
 
 
 YEAR_RE = re.compile(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)")
-BITRATE_RE = re.compile(r"(?<!\d)(\d{1,3}(?:\.\d+)?)\s*(?:mbps|mb/s|m(?:bit)?/?s)(?!\w)", re.I)
+BITRATE_RE = re.compile(r"(?<![A-Z0-9])(\d{1,3}(?:\.\d+)?)\s*(?:mbps|mb/s|m(?:bit)?/?s)(?!\w)", re.I)
 SERIES_TITLE_RE = re.compile(
     r"(?<![A-Z0-9])S\d{1,3}(?:E\d{1,4})?(?![A-Z0-9])"
     r"|\bSEASON[ ._-]*\d+\b|\bCOMPLETE[ ._-]+SERIES\b"
@@ -227,6 +227,16 @@ def minimum_size_matches(
     return True, ""
 
 
+def estimate_bitrate_mbps(size_bytes: Any, runtime_minutes: Any) -> float:
+    """Estimate overall bitrate for one movie torrent from size and runtime."""
+
+    size = _as_float(size_bytes)
+    runtime = _as_float(runtime_minutes)
+    if size <= 0 or runtime <= 0:
+        return 0.0
+    return round(size * 8 / (runtime * 60 * 1_000_000), 2)
+
+
 def merge_profile(base: Mapping[str, Any], override: Optional[Mapping[str, Any]]) -> dict:
     result = dict(base or {})
     for key, value in (override or {}).items():
@@ -303,6 +313,7 @@ def matching_pool_candidates(
         matches,
         key=lambda candidate: (
             profile_score(_candidate_quality(candidate), profile),
+            _as_int(candidate.get("size_bytes")),
             _as_int(candidate.get("seeders")),
             str(candidate.get("title") or ""),
         ),
@@ -406,6 +417,16 @@ def profile_score(quality: QualityInfo, profile: Mapping[str, Any]) -> int:
     effects = _normal_list(profile.get("effects"))
     resolutions = _normal_list(profile.get("resolutions"))
     codecs = _normal_list(profile.get("video_codecs"))
+    if quality.quality_type == "webdl" and quality.resolution in {"2160p", "1080p"}:
+        bitrate = min(max(int(quality.bitrate_mbps * 100), 0), 99_999)
+        score = (
+            _preference_rank(types, quality.quality_type) * 1_000_000_000
+            + _preference_rank(resolutions, quality.resolution) * 100_000_000
+            + bitrate * 1_000
+            + (_preference_rank(effects, quality.effect) * 10 if bitrate else 0)
+            + (_preference_rank(codecs, quality.video_codec) if bitrate else 0)
+        )
+        return score or quality.score
     score = (
         _preference_rank(types, quality.quality_type) * 1_000_000_000
         + _preference_rank(effects, quality.effect) * 10_000_000

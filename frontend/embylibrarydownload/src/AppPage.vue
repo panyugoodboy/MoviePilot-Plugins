@@ -584,13 +584,13 @@ function episodeLabel(item) {
 }
 
 function statusColor(status) {
-  return { success: 'success', queued: 'info', downloading: 'primary', present: 'success', reserved: 'warning', running: 'primary', failed: 'error', cancelled: 'default' }[status] || 'default'
+  return { success: 'success', queued: 'info', downloading: 'primary', present: 'success', reserved: 'warning', running: 'primary', failed: 'error', cleanup_failed: 'error', cancelled: 'default' }[status] || 'default'
 }
 
 function statusLabel(status) {
   return {
     reserved: '已预留', queued: '已排队', downloading: '下载中', present: '已入库',
-    failed: '失败', cancelled: '已取消', running: '运行中', success: '已完成',
+    failed: '失败', cleanup_failed: '旧版本清理失败', cancelled: '已取消', running: '运行中', success: '已完成',
   }[status] || status || '未知'
 }
 
@@ -802,7 +802,7 @@ onBeforeUnmount(() => {
 
       <VWindowItem value="jobs">
         <section aria-labelledby="jobs-title">
-          <div class="section-heading"><div><h2 id="jobs-title">下载任务</h2><p>已预留、已排队和下载中的任务都会计入版本上限；重复的旧失败记录会自动清理。</p></div><div class="button-row"><VBtn class="action-btn" color="warning" variant="tonal" prepend-icon="mdi-restart-alert" :disabled="!jobs.failed_count || hasRunningTask" @click="retryAllFailedJobs">全部重试失败任务（{{ jobs.failed_count }}）</VBtn><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-refresh" @click="loadJobs">刷新任务</VBtn></div></div>
+          <div class="section-heading"><div><h2 id="jobs-title">下载任务</h2><p>普通版本按上限占位；4K和1080P WEB-DL固定槽位可补位并自动升级最高码率版本。</p></div><div class="button-row"><VBtn class="action-btn" color="warning" variant="tonal" prepend-icon="mdi-restart-alert" :disabled="!jobs.failed_count || hasRunningTask" @click="retryAllFailedJobs">全部重试失败任务（{{ jobs.failed_count }}）</VBtn><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-refresh" @click="loadJobs">刷新任务</VBtn></div></div>
           <div class="selection-bar">
             <VCheckbox :model-value="allPageJobsSelected" :indeterminate="selectedJobs.length > 0 && !allPageJobsSelected" hide-details label="当前页全选" @update:model-value="toggleJobPageSelection" />
             <span>已选 {{ selectedJobs.length }} / 当前页 {{ jobs.items.length }}</span>
@@ -846,7 +846,7 @@ onBeforeUnmount(() => {
                 </div>
                 <p class="field-help mb-5">开启后，站点搜索、全站分页、详情解析和种子文件下载统一使用 MoviePilot 系统代理；关闭后直连。Emby 局域网连接不走代理。</p>
                 <div class="settings-grid">
-                  <VSelect v-model="bootstrap.config.max_versions" label="每个影片/每集最多版本" :items="[1,2,3]" />
+                  <VSelect v-model="bootstrap.config.max_versions" label="普通版本上限（WEB-DL固定槽位除外）" :items="[1,2,3]" />
                   <VTextField v-model.number="bootstrap.config.auto_batch_limit" type="number" min="1" max="50" label="每次自动下载数量" hint="扫描完成和自动下载 Cron 均使用此数量；范围 1–50" persistent-hint />
                   <VSelect v-model="bootstrap.config.sites" label="搜索站点（种子池仅使用 UBits）" :items="siteItems" item-title="name" item-value="id" multiple chips closable-chips />
                   <VSelect v-model="bootstrap.config.emby_servers" label="Emby 服务" :items="serverItems" multiple chips closable-chips />
@@ -932,7 +932,7 @@ onBeforeUnmount(() => {
     </VWindow>
 
     <VDialog v-model="confirmDownload" max-width="560">
-      <VCard><VCardTitle>确认批量下载</VCardTitle><VCardText>将处理当前选择的 {{ selectedCandidates.length }} 个候选。每个候选仍会执行媒体识别、同质量去重和最多三版本的原子校验，不符合条件的条目不会提交下载器。</VCardText><VCardActions><VSpacer /><VBtn class="action-btn" variant="text" @click="confirmDownload=false">取消</VBtn><VBtn class="action-btn" color="primary" @click="submitDownloads">确认下载</VBtn></VCardActions></VCard>
+      <VCard><VCardTitle>确认批量下载</VCardTitle><VCardText>将处理当前选择的 {{ selectedCandidates.length }} 个候选。普通版本仍执行同质量去重和最多三版本校验；4K、1080P WEB-DL固定槽位按最高码率补位或升级。</VCardText><VCardActions><VSpacer /><VBtn class="action-btn" variant="text" @click="confirmDownload=false">取消</VBtn><VBtn class="action-btn" color="primary" @click="submitDownloads">确认下载</VBtn></VCardActions></VCard>
     </VDialog>
 
     <VDialog v-model="recommendationDialog" max-width="1180" scrollable>

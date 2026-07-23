@@ -58,6 +58,7 @@ def build_task_summary(
 
     if base_name == "inventory":
         target_stats = result.get("targets") if isinstance(result.get("targets"), Mapping) else {}
+        webdl_stats = result.get("webdl_slots") if isinstance(result.get("webdl_slots"), Mapping) else {}
         rows = [
             ("🖥️", "Emby 服务", len(result.get("servers") or [])),
             ("🎞️", "库存版本", result.get("versions")),
@@ -65,6 +66,9 @@ def build_task_summary(
             ("🎬", "目标影片", target_stats.get("items")),
             ("✅", "已入库", target_stats.get("present")),
             ("⏳", "待补影片", target_stats.get("missing")),
+            ("🔁", "WEB-DL升级", webdl_stats.get("completed")),
+            ("🧹", "清理旧版本", webdl_stats.get("cleaned_versions")),
+            ("⚠️", "升级待处理", webdl_stats.get("failed")),
         ]
     elif base_name == "pool":
         rows = [

@@ -97,6 +97,142 @@ def test_same_quality_slot_is_rejected(tmp_path):
     assert "相同质量槽位" in reason
 
 
+def test_webdl_4k_and_1080p_fill_slots_bypass_three_version_cap(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    media_key = "movie:themoviedb:11"
+    inventory = [
+        inventory_row("remux", media_key, "remux:dv:2160p"),
+        inventory_row("encode", media_key, "encode:hdr10:1080p"),
+        inventory_row("diy", media_key, "diy:hdr10:2160p"),
+    ]
+    inventory[1]["quality_type"] = "encode"
+    inventory[2]["quality_type"] = "diy"
+    web4k = candidate("web-4k", "webdl:hdr10:2160p")
+    web4k.update({"quality_type": "webdl", "resolution": "2160p", "bitrate_mbps": 25})
+    web1080 = candidate("web-1080", "webdl:sdr:1080p")
+    web1080.update({"quality_type": "webdl", "resolution": "1080p", "bitrate_mbps": 12})
+    store.replace_inventory("Emby", inventory)
+    store.replace_candidates("pool", [web4k, web1080])
+
+    job_4k, reason_4k = store.reserve_download("web-4k", [media_key], 3, None, True)
+    job_1080, reason_1080 = store.reserve_download("web-1080", [media_key], 3, None, True)
+
+    assert job_4k and not reason_4k
+    assert job_1080 and not reason_1080
+    jobs = {item["candidate_key"]: item for item in store.list_jobs()["items"]}
+    assert jobs["web-4k"]["webdl_policy"]["mode"] == "fill"
+    assert jobs["web-1080"]["webdl_policy"]["mode"] == "fill"
+
+
+def test_webdl_same_resolution_fill_slot_only_allows_one_active_job(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    media_key = "movie:themoviedb:12"
+    store.replace_inventory("Emby", [inventory_row("remux", media_key)])
+    first = candidate("web-dv", "webdl:dv:2160p")
+    first.update({"quality_type": "webdl", "resolution": "2160p", "bitrate_mbps": 30})
+    second = candidate("web-hdr", "webdl:hdr10:2160p")
+    second.update({"quality_type": "webdl", "resolution": "2160p", "bitrate_mbps": 35})
+    store.replace_candidates("pool", [first, second])
+
+    first_id, _ = store.reserve_download("web-dv", [media_key], 3, None, True)
+    second_id, reason = store.reserve_download("web-hdr", [media_key], 3, None, True)
+
+    assert first_id
+    assert second_id is None
+    assert "2160p 槽位已有任务" in reason
+
+
+def test_higher_webdl_bitrate_replaces_existing_slot_and_lower_is_rejected(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    media_key = "movie:themoviedb:13"
+    old = inventory_row("old-web", media_key, "webdl:sdr:1080p")
+    old.update({"quality_type": "webdl", "resolution": "1080p", "bitrate_mbps": 10})
+    lower = candidate("lower-web", "webdl:hdr10:1080p")
+    lower.update({"quality_type": "webdl", "resolution": "1080p", "bitrate_mbps": 9})
+    higher = candidate("higher-web", "webdl:hdr10:1080p")
+    higher.update({"quality_type": "webdl", "resolution": "1080p", "bitrate_mbps": 15})
+    store.replace_inventory("Emby", [old])
+    store.replace_candidates("pool", [lower, higher])
+
+    lower_id, lower_reason = store.reserve_download("lower-web", [media_key], 1, None, True)
+    higher_id, higher_reason = store.reserve_download("higher-web", [media_key], 1, None, True)
+
+    assert lower_id is None
+    assert "未提升" in lower_reason
+    assert higher_id and not higher_reason
+    job = store.list_jobs()["items"][0]
+    assert job["webdl_policy"]["mode"] == "upgrade"
+    assert job["webdl_policy"]["old_versions"][0]["version_key"] == "old-web"
+
+
+def test_unknown_bitrate_never_replaces_existing_webdl(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    media_key = "movie:themoviedb:14"
+    old = inventory_row("old-web", media_key, "webdl:hdr10:2160p")
+    old.update({"quality_type": "webdl", "resolution": "2160p", "bitrate_mbps": 20})
+    unknown = candidate("unknown-web", "webdl:dv:2160p")
+    unknown.update({"quality_type": "webdl", "resolution": "2160p", "bitrate_mbps": 0})
+    store.replace_inventory("Emby", [old])
+    store.replace_candidates("pool", [unknown])
+
+    job_id, reason = store.reserve_download("unknown-web", [media_key], 3, None, True)
+
+    assert job_id is None
+    assert "码率无法识别" in reason
+
+
+def test_webdl_upgrade_is_ready_only_after_emby_sees_a_better_new_version(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    media_key = "movie:themoviedb:15"
+    old = inventory_row("old-web", media_key, "webdl:sdr:1080p")
+    old.update({"quality_type": "webdl", "resolution": "1080p", "bitrate_mbps": 10})
+    higher = candidate("higher-web", "webdl:hdr10:1080p")
+    higher.update({"quality_type": "webdl", "resolution": "1080p", "bitrate_mbps": 15})
+    store.replace_inventory("Emby", [old])
+    store.replace_candidates("pool", [higher])
+    job_id, _ = store.reserve_download("higher-web", [media_key], 3, None, True)
+    store.update_job(job_id, "queued", download_id="download-15")
+
+    not_better = inventory_row("new-low", media_key, "webdl:hdr10:1080p")
+    not_better.update({"quality_type": "webdl", "resolution": "1080p", "bitrate_mbps": 9})
+    store.replace_inventory("Emby", [old, not_better])
+    assert store.ready_webdl_jobs() == []
+
+    new = inventory_row("new-web", media_key, "webdl:hdr10:1080p")
+    new.update({"quality_type": "webdl", "resolution": "1080p", "bitrate_mbps": 14})
+    store.replace_inventory("Emby", [old, new])
+    ready = store.ready_webdl_jobs()
+
+    assert [item["id"] for item in ready] == [job_id]
+    assert ready[0]["new_versions"][0]["version_key"] == "new-web"
+    store.mark_webdl_version_cleaned(job_id, "old-web")
+    store.finish_webdl_job(job_id)
+    assert store.list_jobs()["items"][0]["status"] == "present"
+    assert [item["version_key"] for item in store.list_inventory()["items"]] == ["new-web"]
+
+
+def test_webdl_upgrade_never_treats_old_path_with_changed_source_id_as_new(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    media_key = "movie:themoviedb:16"
+    old = inventory_row("old-web", media_key, "webdl:sdr:1080p")
+    old.update({"quality_type": "webdl", "resolution": "1080p", "bitrate_mbps": 10})
+    higher = candidate("higher-web", "webdl:hdr10:1080p")
+    higher.update({"quality_type": "webdl", "resolution": "1080p", "bitrate_mbps": 15})
+    store.replace_inventory("Emby", [old])
+    store.replace_candidates("pool", [higher])
+    job_id, _ = store.reserve_download("higher-web", [media_key], 3, None, True)
+    store.update_job(job_id, "queued", download_id="download-16")
+
+    changed_id = inventory_row("changed-id", media_key, "webdl:hdr10:1080p")
+    changed_id.update({
+        "quality_type": "webdl", "resolution": "1080p", "bitrate_mbps": 20,
+        "path": old["path"],
+    })
+    store.replace_inventory("Emby", [changed_id])
+
+    assert store.ready_webdl_jobs() == []
+
+
 def test_candidate_pages_are_fixed_to_fifty_and_year_descending(tmp_path):
     store = PluginStore(tmp_path / "state.db")
     rows = []
@@ -140,6 +276,21 @@ def test_pool_candidates_are_filtered_and_counted_by_quality_category(tmp_path):
         "diy": 1,
         "encode": 1,
     }
+
+
+def test_unknown_bitrate_candidates_use_larger_size_as_webdl_fallback(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    smaller = candidate("smaller", "webdl:hdr10:2160p")
+    larger = candidate("larger", "webdl:hdr10:2160p")
+    for row in (smaller, larger):
+        row.update({"quality_type": "webdl", "resolution": "2160p", "bitrate_mbps": 0})
+    smaller["quality_score"] = 1_090_000_000
+    larger["quality_score"] = 1_010_000_000
+    smaller["size_bytes"] = 10 * 1024 ** 3
+    larger["size_bytes"] = 20 * 1024 ** 3
+    store.replace_candidates("pool", [smaller, larger])
+
+    assert store.pending_auto_candidate_keys() == ["larger", "smaller"]
 
 
 def test_minimum_size_settings_regrade_existing_scanned_candidates(tmp_path):
@@ -604,3 +755,16 @@ def test_existing_target_database_adds_recommendation_list_columns(tmp_path):
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(targets)")}
 
     assert {"recommend_source", "items_json"}.issubset(columns)
+
+
+def test_existing_download_database_adds_webdl_policy_column(tmp_path):
+    path = tmp_path / "state.db"
+    store = PluginStore(path)
+    with store.connect() as conn:
+        conn.execute("ALTER TABLE download_jobs DROP COLUMN webdl_policy_json")
+
+    migrated = PluginStore(path)
+    with migrated.connect() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(download_jobs)")}
+
+    assert "webdl_policy_json" in columns

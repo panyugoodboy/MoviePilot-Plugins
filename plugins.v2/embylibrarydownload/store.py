@@ -13,7 +13,7 @@ from typing import Any, Iterable, Iterator, Mapping, Optional
 
 
 ACTIVE_JOB_STATES = ("reserved", "queued", "downloading")
-DUPLICATE_JOB_STATES = (*ACTIVE_JOB_STATES, "present")
+DUPLICATE_JOB_STATES = (*ACTIVE_JOB_STATES, "cleanup_failed", "present")
 RETRYABLE_JOB_STATES = ("failed", "cancelled")
 DELETABLE_JOB_STATES = (*RETRYABLE_JOB_STATES, "present")
 JSON_COLUMNS = {
@@ -26,6 +26,7 @@ JSON_COLUMNS = {
     "quality_json": "quality",
     "media_keys_json": "media_keys",
     "baseline_json": "baseline",
+    "webdl_policy_json": "webdl_policy",
     "items_json": "items",
 }
 
@@ -170,6 +171,7 @@ class PluginStore:
                     media_keys_json TEXT NOT NULL,
                     quality_slot TEXT,
                     baseline_json TEXT NOT NULL DEFAULT '{}',
+                    webdl_policy_json TEXT NOT NULL DEFAULT '{}',
                     save_path TEXT,
                     automatic INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL,
@@ -204,6 +206,9 @@ class PluginStore:
                 conn.execute("ALTER TABLE targets ADD COLUMN recommend_source TEXT")
             if "items_json" not in target_columns:
                 conn.execute("ALTER TABLE targets ADD COLUMN items_json TEXT NOT NULL DEFAULT '[]'")
+            job_columns = {row["name"] for row in conn.execute("PRAGMA table_info(download_jobs)")}
+            if "webdl_policy_json" not in job_columns:
+                conn.execute("ALTER TABLE download_jobs ADD COLUMN webdl_policy_json TEXT NOT NULL DEFAULT '{}'")
 
     def replace_inventory(self, server_name: str, rows: list[Mapping[str, Any]]) -> int:
         now = utcnow()
@@ -517,6 +522,13 @@ class PluginStore:
                 (dumps(media), dumps(media_keys), utcnow(), candidate_key),
             )
 
+    def update_candidate_bitrate(self, candidate_key: str, bitrate_mbps: float) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE candidates SET bitrate_mbps=?, updated_at=? WHERE candidate_key=?",
+                (float(bitrate_mbps), utcnow(), candidate_key),
+            )
+
     def get_candidate(self, candidate_key: str) -> Optional[dict]:
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM candidates WHERE candidate_key=?", (candidate_key,)).fetchone()
@@ -587,7 +599,13 @@ class PluginStore:
             total = conn.execute(f"SELECT COUNT(*) FROM candidates{where}", params).fetchone()[0]
             rows = conn.execute(
                 f"SELECT * FROM candidates{where} "
-                "ORDER BY COALESCE(year, 0) DESC, quality_score DESC, bitrate_mbps DESC, seeders DESC, title "
+                "ORDER BY COALESCE(year, 0) DESC, "
+                "COALESCE(quality_score, 0) / 1000000000 DESC, "
+                "CASE WHEN quality_type='webdl' THEN COALESCE(bitrate_mbps, 0) "
+                "ELSE COALESCE(quality_score, 0) % 1000000000 END DESC, "
+                "CASE WHEN quality_type='webdl' AND COALESCE(bitrate_mbps, 0)=0 "
+                "THEN COALESCE(size_bytes, 0) ELSE 0 END DESC, "
+                "seeders DESC, title "
                 "LIMIT ? OFFSET ?",
                 [*params, page_size, (page - 1) * page_size],
             ).fetchall()
@@ -608,10 +626,15 @@ class PluginStore:
                   AND NOT EXISTS (
                     SELECT 1 FROM download_jobs AS job
                     WHERE job.torrent_key=candidate.torrent_key
-                      AND job.status IN (?,?,?,?)
+                      AND job.status IN (?,?,?,?,?)
                   )
-                ORDER BY COALESCE(year, 0) DESC, quality_score DESC,
-                         bitrate_mbps DESC, seeders DESC, title
+                ORDER BY COALESCE(year, 0) DESC,
+                         COALESCE(quality_score, 0) / 1000000000 DESC,
+                         CASE WHEN quality_type='webdl' THEN COALESCE(bitrate_mbps, 0)
+                              ELSE COALESCE(quality_score, 0) % 1000000000 END DESC,
+                         CASE WHEN quality_type='webdl' AND COALESCE(bitrate_mbps, 0)=0
+                              THEN COALESCE(size_bytes, 0) ELSE 0 END DESC,
+                         seeders DESC, title
                 """,
                 DUPLICATE_JOB_STATES,
             ).fetchall()
@@ -655,20 +678,38 @@ class PluginStore:
                 if retry_job["candidate_key"] != candidate_key:
                     return None, "重试任务与候选种子不匹配"
             duplicate = conn.execute(
-                "SELECT id FROM download_jobs WHERE torrent_key=? AND status IN (?,?,?,?) LIMIT 1",
+                "SELECT id FROM download_jobs WHERE torrent_key=? AND status IN (?,?,?,?,?) LIMIT 1",
                 (candidate["torrent_key"], *DUPLICATE_JOB_STATES),
             ).fetchone()
             if duplicate:
                 return None, "该种子已在下载队列"
 
             active_jobs = conn.execute(
-                "SELECT media_keys_json, quality_slot FROM download_jobs WHERE status IN (?,?,?)",
+                "SELECT media_keys_json, quality_slot, webdl_policy_json "
+                "FROM download_jobs WHERE status IN (?,?,?)",
                 ACTIVE_JOB_STATES,
             ).fetchall()
+            webdl_policy, webdl_reason = _build_webdl_policy(
+                conn, media_keys, candidate
+            )
+            webdl_jobs = conn.execute(
+                "SELECT media_keys_json, quality_slot, webdl_policy_json FROM download_jobs "
+                "WHERE status IN ('reserved','queued','downloading','cleanup_failed')"
+            ).fetchall()
+            if webdl_reason:
+                return None, webdl_reason
+            if webdl_policy and any(
+                _active_job_has_webdl_slot(job, media_keys, webdl_policy["resolution"])
+                for job in webdl_jobs
+            ):
+                return None, f"WEB-DL {webdl_policy['resolution']} 槽位已有任务在下载中"
+
             baseline = {}
             for media_key in media_keys:
                 existing = self.inventory_version_count(media_key, conn)
                 baseline[media_key] = existing
+                if webdl_policy:
+                    continue
                 reserved = sum(
                     1 for job in active_jobs
                     if any(_keys_overlap(media_key, key) for key in _loads(job["media_keys_json"], []))
@@ -677,7 +718,7 @@ class PluginStore:
                     return None, f"{media_key} 已达到 {cap} 个版本上限（含下载中）"
 
             slot = candidate["quality_slot"]
-            if slot and not allow_same_slot:
+            if slot and not allow_same_slot and not webdl_policy:
                 for media_key in media_keys:
                     if _inventory_has_slot(conn, media_key, slot):
                         return None, f"{media_key} 已有相同质量槽位 {slot}"
@@ -693,9 +734,9 @@ class PluginStore:
                 """
                 INSERT INTO download_jobs (
                     candidate_key, torrent_key, target_id, title, site_name, media_keys_json,
-                    quality_slot, baseline_json, save_path, automatic, status,
+                    quality_slot, baseline_json, webdl_policy_json, save_path, automatic, status,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
                 """,
                 (
                     candidate_key,
@@ -706,6 +747,7 @@ class PluginStore:
                     dumps(media_keys),
                     slot,
                     dumps(baseline),
+                    dumps(webdl_policy or {}),
                     save_path,
                     int(automatic),
                     now,
@@ -821,7 +863,7 @@ class PluginStore:
             ).fetchall()
             active_jobs = conn.execute(
                 "SELECT torrent_key, media_keys_json, quality_slot, status "
-                "FROM download_jobs WHERE status IN (?,?,?,?)",
+                "FROM download_jobs WHERE status IN (?,?,?,?,?)",
                 DUPLICATE_JOB_STATES,
             ).fetchall()
             target_caps = {
@@ -832,6 +874,8 @@ class PluginStore:
             for job in failed_jobs:
                 if any(active["torrent_key"] == job["torrent_key"] for active in active_jobs):
                     cleaned_ids.append(int(job["id"]))
+                    continue
+                if _loads(job["webdl_policy_json"], {}):
                     continue
                 media_keys = _loads(job["media_keys_json"], [])
                 cap = max(1, min(3, int(max_versions)))
@@ -893,10 +937,12 @@ class PluginStore:
     def reconcile_jobs(self) -> None:
         with self.connect() as conn:
             jobs = conn.execute(
-                "SELECT id, media_keys_json, baseline_json, quality_slot "
+                "SELECT id, media_keys_json, baseline_json, quality_slot, webdl_policy_json "
                 "FROM download_jobs WHERE status IN ('queued','downloading') ORDER BY id"
             ).fetchall()
             for job in jobs:
+                if _loads(job["webdl_policy_json"], {}):
+                    continue
                 keys = _loads(job["media_keys_json"], [])
                 baseline = _loads(job["baseline_json"], {})
                 slot = job["quality_slot"]
@@ -909,6 +955,101 @@ class PluginStore:
                         "UPDATE download_jobs SET status='present', updated_at=? WHERE id=?",
                         (utcnow(), job["id"]),
                     )
+
+    def ready_webdl_jobs(self) -> list[dict]:
+        """Return WEB-DL fill/upgrade jobs whose new version is visible in Emby."""
+
+        ready = []
+        with self.connect() as conn:
+            jobs = conn.execute(
+                "SELECT * FROM download_jobs "
+                "WHERE status IN ('queued','downloading','cleanup_failed') "
+                "AND webdl_policy_json<>'{}' ORDER BY id"
+            ).fetchall()
+            for row in jobs:
+                job = _decode(row)
+                policy = job.get("webdl_policy") or {}
+                resolution = str(policy.get("resolution") or "")
+                old_keys = {
+                    str(item.get("version_key"))
+                    for item in policy.get("old_versions") or []
+                    if item.get("version_key")
+                }
+                old_paths = {
+                    str(item.get("path"))
+                    for item in policy.get("old_versions") or []
+                    if item.get("path")
+                }
+                old_bitrate = float(policy.get("old_bitrate_mbps") or 0)
+                new_versions = []
+                complete = True
+                for media_key in job.get("media_keys") or []:
+                    rows = conn.execute(
+                        "SELECT * FROM inventory_versions WHERE media_key=? "
+                        "AND quality_type='webdl' AND resolution=? "
+                        "ORDER BY bitrate_mbps DESC",
+                        (media_key, resolution),
+                    ).fetchall()
+                    matches = [
+                        _decode(item) for item in rows
+                        if item["version_key"] not in old_keys
+                        and str(item["path"] or "") not in old_paths
+                        and (
+                            policy.get("mode") == "fill"
+                            or float(item["bitrate_mbps"] or 0) > old_bitrate
+                        )
+                    ]
+                    if not matches:
+                        complete = False
+                        break
+                    new_versions.extend(matches)
+                if complete and new_versions:
+                    job["new_versions"] = new_versions
+                    ready.append(job)
+        return ready
+
+    def mark_webdl_version_cleaned(self, job_id: int, version_key: str) -> None:
+        """Persist cleanup progress so a later retry never repeats a completed deletion."""
+
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT webdl_policy_json FROM download_jobs WHERE id=?", (int(job_id),)
+            ).fetchone()
+            if not row:
+                return
+            policy = _loads(row["webdl_policy_json"], {})
+            policy["old_versions"] = [
+                item for item in policy.get("old_versions") or []
+                if str(item.get("version_key")) != str(version_key)
+            ]
+            conn.execute(
+                "UPDATE download_jobs SET webdl_policy_json=?, updated_at=? WHERE id=?",
+                (dumps(policy), utcnow(), int(job_id)),
+            )
+            conn.execute(
+                "DELETE FROM inventory_versions WHERE version_key=?", (str(version_key),)
+            )
+
+    def finish_webdl_job(self, job_id: int) -> None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT webdl_policy_json FROM download_jobs WHERE id=?", (int(job_id),)
+            ).fetchone()
+            policy = _loads(row["webdl_policy_json"], {}) if row else {}
+            if policy.get("old_versions"):
+                raise RuntimeError("旧 WEB-DL 版本尚未清理完成")
+            conn.execute(
+                "UPDATE download_jobs SET status='present', error=NULL, updated_at=? WHERE id=?",
+                (utcnow(), int(job_id)),
+            )
+
+    def fail_webdl_cleanup(self, job_id: int, error: Any) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE download_jobs SET status='cleanup_failed', error=?, updated_at=? WHERE id=?",
+                (_none(error), utcnow(), int(job_id)),
+            )
 
     def stats(self) -> dict:
         with self.connect() as conn:
@@ -986,6 +1127,88 @@ def _keys_overlap(left: str, right: str) -> bool:
     return False
 
 
+def _build_webdl_policy(
+    conn: sqlite3.Connection,
+    media_keys: list[str],
+    candidate: sqlite3.Row,
+) -> tuple[Optional[dict], str]:
+    resolution = str(candidate["resolution"] or "").lower()
+    if candidate["quality_type"] != "webdl" or resolution not in {"2160p", "1080p"}:
+        return None, ""
+    if not media_keys or any(not key.startswith("movie:") for key in media_keys):
+        return None, ""
+
+    existing_webdl = []
+    has_base_version = False
+    for media_key in media_keys:
+        rows = conn.execute(
+            "SELECT * FROM inventory_versions WHERE media_key=?",
+            (media_key,),
+        ).fetchall()
+        existing_webdl.extend(
+            row for row in rows
+            if row["quality_type"] == "webdl" and row["resolution"] == resolution
+        )
+        has_base_version = has_base_version or any(
+            row["quality_type"] in {"remux", "encode"} for row in rows
+        )
+
+    candidate_bitrate = _float(candidate["bitrate_mbps"])
+    old_bitrate = max((_float(row["bitrate_mbps"]) for row in existing_webdl), default=0.0)
+    if existing_webdl:
+        if candidate_bitrate <= 0:
+            return None, f"已有 WEB-DL {resolution}，新版本码率无法识别，不执行替换"
+        if candidate_bitrate <= old_bitrate:
+            return None, (
+                f"WEB-DL {resolution} 当前最高码率 {old_bitrate:g} Mbps，"
+                f"候选 {candidate_bitrate:g} Mbps 未提升"
+            )
+        mode = "upgrade"
+    elif has_base_version:
+        mode = "fill"
+    else:
+        return None, ""
+
+    old_versions = []
+    seen = set()
+    for row in existing_webdl:
+        if row["version_key"] in seen:
+            continue
+        seen.add(row["version_key"])
+        old_versions.append({
+            key: row[key]
+            for key in (
+                "version_key", "media_key", "server_name", "library_id", "item_id",
+                "media_source_id", "title", "year", "path", "bitrate_mbps",
+                "size_bytes", "quality_slot",
+            )
+        })
+    return {
+        "mode": mode,
+        "resolution": resolution,
+        "candidate_bitrate_mbps": candidate_bitrate,
+        "old_bitrate_mbps": old_bitrate,
+        "server_names": sorted({str(row["server_name"]) for row in existing_webdl}),
+        "old_versions": old_versions,
+    }, ""
+
+
+def _active_job_has_webdl_slot(
+    job: sqlite3.Row, media_keys: list[str], resolution: str
+) -> bool:
+    job_keys = _loads(job["media_keys_json"], [])
+    if not any(
+        _keys_overlap(media_key, job_key)
+        for media_key in media_keys for job_key in job_keys
+    ):
+        return False
+    policy = _loads(job["webdl_policy_json"], {})
+    if policy:
+        return policy.get("resolution") == resolution
+    slot = str(job["quality_slot"] or "").split(":")
+    return len(slot) >= 2 and slot[0] == "webdl" and slot[-1] == resolution
+
+
 def _inventory_has_slot(conn: sqlite3.Connection, media_key: str, slot: str) -> bool:
     if media_key.startswith("tv:") and not _is_tv_episode_key(media_key):
         pattern = f"{media_key}E%" if _is_tv_season_key(media_key) else f"{media_key}:%"
@@ -1012,3 +1235,10 @@ def _is_tv_episode_key(media_key: str) -> bool:
         return False
     season, episode = tail[1:].split("E", 1)
     return season.isdigit() and episode.isdigit()
+
+
+def _float(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
