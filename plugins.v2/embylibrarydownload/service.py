@@ -45,6 +45,7 @@ from .sources import (
     with_site_proxy,
 )
 from .replacement import cleanup_old_webdl_version, verify_new_webdl_version
+from .recognition import build_recognition_attempts
 from .store import PluginStore, dumps
 
 
@@ -572,10 +573,13 @@ class LibraryDownloadService:
         candidate = self.store.get_candidate(candidate_key)
         if not candidate:
             return {"candidate_key": candidate_key, "success": False, "message": "候选种子不存在或已刷新"}
+        target = target_override or (
+            self.store.get_target(candidate["target_id"]) if candidate.get("target_id") else None
+        )
         meta = MetaInfo(title=candidate["title"], subtitle=candidate.get("description"))
         media = self._restore_media(candidate.get("media"))
         if not media:
-            media = self._search_chain().recognize_media(meta=meta)
+            media = self._recognize_candidate(candidate, target)
         if not media:
             return {"candidate_key": candidate_key, "success": False, "message": "媒体信息识别失败，未提交下载"}
         config = self.config()
@@ -585,9 +589,6 @@ class LibraryDownloadService:
         )
         if excluded_reason:
             return {"candidate_key": candidate_key, "success": False, "message": excluded_reason}
-        target = target_override or (
-            self.store.get_target(candidate["target_id"]) if candidate.get("target_id") else None
-        )
         profile = merge_profile(self._base_profile(), (target or {}).get("profile"))
         if candidate.get("quality_type") == "webdl" and not candidate.get("bitrate_mbps"):
             estimated_bitrate = estimate_bitrate_mbps(
@@ -781,6 +782,43 @@ class LibraryDownloadService:
         media = MediaInfo()
         media.from_dict(dict(data))
         return media
+
+    def _recognize_candidate(
+        self, candidate: Mapping[str, Any], target: Optional[Mapping[str, Any]]
+    ) -> Optional[MediaInfo]:
+        search = self._search_chain()
+        parameters = inspect.signature(search.recognize_media).parameters
+        description = candidate.get("description")
+        identity_media = None
+        for attempt in build_recognition_attempts(candidate, target):
+            kwargs = {
+                "meta": MetaInfo(title=attempt["title"], subtitle=description),
+            }
+            source, media_id = attempt["source"], attempt["media_id"]
+            if source and media_id:
+                media_type = MediaType.TV if attempt["media_type"] == "tv" else MediaType.MOVIE
+                if "mtype" in parameters:
+                    kwargs["mtype"] = media_type
+                if "source" in parameters and "mediaid" in parameters:
+                    kwargs.update({"source": source, "mediaid": media_id})
+                else:
+                    legacy_param = {
+                        "themoviedb": "tmdbid",
+                        "douban": "doubanid",
+                        "bangumi": "bangumiid",
+                        "anilist": "anilistid",
+                    }.get(source)
+                    if not legacy_param or legacy_param not in parameters:
+                        continue
+                    kwargs[legacy_param] = _int(media_id) if legacy_param != "doubanid" else media_id
+            media = search.recognize_media(**kwargs)
+            if media:
+                if source and media_id and source != "themoviedb" \
+                        and not getattr(media, "tmdb_id", None):
+                    identity_media = media
+                    continue
+                return media
+        return identity_media
 
     @staticmethod
     def _media_keys(media: MediaInfo, meta: MetaInfo, target: Optional[Mapping[str, Any]]) -> list[str]:
