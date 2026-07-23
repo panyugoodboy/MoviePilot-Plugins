@@ -381,8 +381,8 @@ class PluginStore:
         clauses, params = ["item_type=?"], [media_type]
         year = _int(target.get("year"))
         if year:
-            clauses.append("(year=? OR year IS NULL)")
-            params.append(year)
+            clauses.append("(year BETWEEN ? AND ? OR year IS NULL)")
+            params.extend([year - 1, year + 1])
         rows = conn.execute(
             "SELECT version_key, title, original_title FROM inventory_versions WHERE "
             + " AND ".join(clauses),

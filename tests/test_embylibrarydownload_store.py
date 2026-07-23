@@ -545,7 +545,7 @@ def test_target_inventory_title_fallback_uses_original_title_and_year(tmp_path):
     row = inventory_row("original-v1", "movie:themoviedb:80")
     row.update({"title": "中文电影", "original_title": "Original.Movie", "year": 2026})
     wrong_year = inventory_row("wrong-year", "movie:themoviedb:81")
-    wrong_year.update({"title": "Original Movie", "original_title": "Original Movie", "year": 2025})
+    wrong_year.update({"title": "Original Movie", "original_title": "Original Movie", "year": 2024})
     store.replace_inventory("Emby", [row, wrong_year])
     store.mark_inventory_synced()
 
@@ -553,6 +553,32 @@ def test_target_inventory_title_fallback_uses_original_title_and_year(tmp_path):
 
     assert result["inventory_state"] == "present"
     assert result["inventory_count"] == 1
+
+
+def test_douban_target_title_allows_one_year_release_difference(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    target = store.save_target({
+        "title": "豆瓣电影 Top 250",
+        "recommend_source": "recommend/douban_movie_top250",
+        "items": [{
+            "media_type": "movie",
+            "media_source": "douban",
+            "media_id": "1291546",
+            "title": "霸王别姬",
+            "year": 1993,
+        }],
+    })
+    present = inventory_row("farewell-v1", "movie:themoviedb:10997")
+    present.update({"title": "霸王别姬", "original_title": "霸王别姬", "year": 1992})
+    wrong = inventory_row("farewell-wrong", "movie:themoviedb:99999")
+    wrong.update({"title": "霸王别姬", "original_title": "霸王别姬", "year": 1991})
+    store.replace_inventory("Emby", [present, wrong])
+    store.mark_inventory_synced()
+
+    result = {item["id"]: item for item in store.list_targets(with_inventory=True)}[target["id"]]
+
+    assert result["items"][0]["inventory_state"] == "present"
+    assert result["items"][0]["inventory_count"] == 1
 
 
 def test_tv_target_inventory_matches_episode_media_key_prefix(tmp_path):
