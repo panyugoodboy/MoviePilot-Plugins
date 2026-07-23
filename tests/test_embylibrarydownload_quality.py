@@ -24,6 +24,7 @@ tv_exclusion_reason = quality_module.tv_exclusion_reason
 select_save_path = quality_module.select_save_path
 prioritize_pool_candidates = quality_module.prioritize_pool_candidates
 matching_pool_candidates = quality_module.matching_pool_candidates
+plan_pool_candidates = quality_module.plan_pool_candidates
 
 
 def test_classifies_diy_dolby_vision_and_bitrate():
@@ -276,3 +277,51 @@ def test_recommendation_list_item_is_prioritized_as_parent_target():
     assert [candidate["candidate_key"] for candidate, _ in ordered] == ["shawshank", "regular"]
     assert ordered[0][1]["id"] == 9
     assert ordered[0][1]["title"] == "The Shawshank Redemption"
+
+
+def test_pool_plan_keeps_only_highest_webdl_per_movie_and_resolution():
+    low_4k = {
+        "candidate_key": "low-4k", "eligible": True,
+        "title": "Dune.Part.Two.2024.2160p.WEB-DL", "year": 2024,
+        "quality_type": "webdl", "resolution": "2160p", "size_bytes": 18 * 1024 ** 3,
+        "seeders": 30, "meta": {"original_name": "Dune Part Two", "year": "2024"},
+    }
+    high_4k = {
+        **low_4k, "candidate_key": "high-4k", "size_bytes": 30 * 1024 ** 3,
+        "seeders": 5, "quality_effect": "hdr10",
+    }
+    low_1080p = {
+        **low_4k, "candidate_key": "low-1080p", "resolution": "1080p",
+        "size_bytes": 8 * 1024 ** 3,
+    }
+    high_1080p = {
+        **low_1080p, "candidate_key": "high-1080p", "size_bytes": 12 * 1024 ** 3,
+    }
+    remux = {
+        **low_4k, "candidate_key": "remux", "quality_type": "remux",
+        "size_bytes": 60 * 1024 ** 3,
+    }
+
+    planned = plan_pool_candidates([low_4k, high_4k, low_1080p, high_1080p, remux])
+    eligible = [item["candidate_key"] for item in planned if item["eligible"]]
+
+    assert eligible == ["high-4k", "high-1080p", "remux"]
+    assert planned[0]["rejection_reason"] == "同影片 2160p 已保留更高码率的 WEB-DL 候选"
+    assert planned[2]["rejection_reason"] == "同影片 1080p 已保留更高码率的 WEB-DL 候选"
+
+
+def test_pool_plan_uses_bitrate_when_every_candidate_has_it_and_keeps_years_separate():
+    base = {
+        "eligible": True, "quality_type": "webdl", "resolution": "2160p",
+        "size_bytes": 20 * 1024 ** 3, "meta": {"name": "Nosferatu"},
+    }
+    older_low = {**base, "candidate_key": "2024-low", "year": 2024, "bitrate_mbps": 20}
+    older_high = {
+        **base, "candidate_key": "2024-high", "year": 2024,
+        "bitrate_mbps": 35, "size_bytes": 18 * 1024 ** 3,
+    }
+    classic = {**base, "candidate_key": "1922", "year": 1922, "bitrate_mbps": 15}
+
+    planned = plan_pool_candidates([older_low, older_high, classic])
+
+    assert [item["candidate_key"] for item in planned if item["eligible"]] == ["2024-high", "1922"]

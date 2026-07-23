@@ -30,6 +30,7 @@ from .quality import (
     matching_pool_candidates,
     merge_profile,
     minimum_size_matches,
+    plan_pool_candidates,
     prioritize_pool_candidates,
     profile_score,
     quality_matches,
@@ -290,7 +291,7 @@ class LibraryDownloadService:
             progress, 0, "UBits", "全部分类", 0, completed_pages,
             completed_sources, total_sources, candidates, finished=True,
         )
-        rows = list(candidates.values())
+        rows = plan_pool_candidates(candidates.values())
         self.store.replace_candidates("pool", rows)
 
         auto_result = None
@@ -323,8 +324,9 @@ class LibraryDownloadService:
             downloads = []
             skipped = []
             attempted = 0
+            planned = plan_pool_candidates(self.store.pending_auto_candidates())
             ordered = prioritize_pool_candidates(
-                self.store.pending_auto_candidates(),
+                (candidate for candidate in planned if candidate.get("eligible")),
                 self.store.list_targets(),
                 self._base_profile(),
                 _ids(config.get("sites")),
@@ -361,7 +363,10 @@ class LibraryDownloadService:
         if not target or not target.get("enabled"):
             raise RuntimeError("目标不存在或未启用")
         config = self.config()
-        pool_candidates = self.store.pending_auto_candidates()
+        pool_candidates = [
+            candidate for candidate in plan_pool_candidates(self.store.pending_auto_candidates())
+            if candidate.get("eligible")
+        ]
         matched_rows = []
         seen = set()
         for media_target in expand_target_items(target):
@@ -621,6 +626,8 @@ class LibraryDownloadService:
             retry_job_id=retry_job_id,
         )
         if not job_id:
+            if automatic and retry_job_id is None:
+                self.store.reject_candidate(candidate_key, reason)
             return {"candidate_key": candidate_key, "success": False, "message": reason}
 
         try:

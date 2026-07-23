@@ -326,6 +326,16 @@ def test_pending_auto_candidates_exclude_torrents_already_added_to_downloads(tmp
     assert store.pending_auto_candidate_keys() == ["next"]
 
 
+def test_inventory_rejected_candidate_is_not_retried_until_next_scan(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    store.replace_candidates("pool", [candidate("not-needed"), candidate("needed")])
+
+    store.reject_candidate("not-needed", "媒体库已有更好版本")
+
+    assert store.pending_auto_candidate_keys() == ["needed"]
+    assert store.get_candidate("not-needed")["rejection_reason"] == "媒体库已有更好版本"
+
+
 def test_retry_reservation_replaces_failed_job_with_new_attempt(tmp_path):
     store = PluginStore(tmp_path / "state.db")
     store.replace_candidates("pool", [candidate("retry")])

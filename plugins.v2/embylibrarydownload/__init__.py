@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 from threading import Lock, Thread
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import Body
+from fastapi import Body, HTTPException, Response
+from fastapi.responses import FileResponse
 
+from app.core.config import settings
 from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas.types import NotificationType
+from app.utils.http import RequestUtils
 
 from .notifications import build_task_summary, build_test_summary
+from .posters import poster_cache_suffix, poster_request_headers, safe_poster_url
 from .schedule import cron_preview
 from .service import LibraryDownloadService
 from .store import PluginStore
@@ -63,7 +68,7 @@ class EmbyLibraryDownload(_PluginBase):
     plugin_name = "联动EMBY库筛选下载"
     plugin_desc = "以 Emby 实际媒体版本为准，按站点和质量规则搜索、限量并下载资源。"
     plugin_icon = "emby.png"
-    plugin_version = "0.3.7"
+    plugin_version = "0.3.8"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "embylibrarydownload_"
@@ -135,6 +140,10 @@ class EmbyLibraryDownload(_PluginBase):
 
     def get_api(self) -> List[Dict[str, Any]]:
         return [
+            self._route(
+                "/poster/{target_id}/{position}", self._api_poster, ["GET"],
+                "目标清单海报", allow_anonymous=True,
+            ),
             self._route("/bootstrap", self._api_bootstrap, ["GET"], "插件初始化数据"),
             self._route("/overview", self._api_overview, ["GET"], "总览统计"),
             self._route("/inventory", self._api_inventory, ["GET"], "Emby版本库存"),
@@ -227,6 +236,46 @@ class EmbyLibraryDownload(_PluginBase):
 
     def _api_targets(self) -> dict:
         return self._ok(self._require_store().list_targets(with_inventory=True))
+
+    def _api_poster(self, target_id: int, position: int):
+        target = self._require_store().get_target(target_id)
+        if not target:
+            raise HTTPException(status_code=404, detail="目标清单不存在")
+        items = target.get("items") if isinstance(target.get("items"), list) else []
+        item = next(
+            (value for value in items if self._to_int(value.get("position"), -1) == position),
+            items[position] if 0 <= position < len(items) else None,
+        )
+        url = safe_poster_url((item or {}).get("poster_url"))
+        if not url:
+            raise HTTPException(status_code=404, detail="海报地址不可用")
+
+        cache_dir = self.get_data_path() / "poster_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_key = hashlib.sha256(url.encode("utf-8")).hexdigest()
+        cached = next((path for path in cache_dir.glob(f"{cache_key}.*") if path.is_file()), None)
+        cache_headers = {"Cache-Control": "public, max-age=604800"}
+        if cached:
+            return FileResponse(cached, headers=cache_headers)
+
+        try:
+            response = RequestUtils(
+                headers=poster_request_headers(url),
+                proxies=settings.PROXY if self._config.get("proxy_enabled") else None,
+                timeout=20,
+            ).get_res(url)
+        except Exception as error:
+            logger.warning(f"[联动EMBY库筛选下载] 获取目标海报失败：{error}")
+            raise HTTPException(status_code=502, detail="海报获取失败") from error
+        if not response or not response.ok:
+            raise HTTPException(status_code=502, detail="海报源请求失败")
+        content_type = str((response.headers or {}).get("Content-Type") or "").split(";", 1)[0]
+        content = response.content
+        if not content or not content_type.lower().startswith("image/") or len(content) > 15 * 1024 ** 2:
+            raise HTTPException(status_code=502, detail="海报源返回无效内容")
+        cache_file = cache_dir / f"{cache_key}{poster_cache_suffix(url, content_type)}"
+        cache_file.write_bytes(content)
+        return Response(content=content, media_type=content_type, headers=cache_headers)
 
     def _api_create_target(self, payload: Dict[str, Any] = Body(default={})) -> dict:
         try:
@@ -502,8 +551,19 @@ class EmbyLibraryDownload(_PluginBase):
             task["message"] = str(value.get("message") or "")
 
     @staticmethod
-    def _route(path: str, endpoint, methods: List[str], summary: str) -> Dict[str, Any]:
-        return {"path": path, "endpoint": endpoint, "methods": methods, "auth": "bear", "summary": summary}
+    def _route(
+        path: str,
+        endpoint,
+        methods: List[str],
+        summary: str,
+        allow_anonymous: bool = False,
+    ) -> Dict[str, Any]:
+        route = {"path": path, "endpoint": endpoint, "methods": methods, "summary": summary}
+        if allow_anonymous:
+            route["allow_anonymous"] = True
+        else:
+            route["auth"] = "bear"
+        return route
 
     @staticmethod
     def _ok(data: Any = None, message: str = "") -> dict:

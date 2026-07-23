@@ -237,6 +237,43 @@ def estimate_bitrate_mbps(size_bytes: Any, runtime_minutes: Any) -> float:
     return round(size * 8 / (runtime * 60 * 1_000_000), 2)
 
 
+def plan_pool_candidates(candidates: Iterable[Mapping[str, Any]]) -> list[dict]:
+    """Keep only the best WEB-DL candidate for each movie and fixed resolution."""
+
+    rows = [dict(candidate) for candidate in candidates]
+    groups: dict[tuple[str, int, str], list[int]] = {}
+    for index, candidate in enumerate(rows):
+        if not candidate.get("eligible"):
+            continue
+        if candidate.get("quality_type") != "webdl":
+            continue
+        resolution = str(candidate.get("resolution") or "").lower()
+        if resolution not in {"2160p", "1080p"}:
+            continue
+        movie_key = _pool_movie_key(candidate)
+        year = _as_int(candidate.get("year"))
+        if not movie_key or not year:
+            continue
+        groups.setdefault((movie_key, year, resolution), []).append(index)
+
+    for (_, _, resolution), indexes in groups.items():
+        if len(indexes) < 2:
+            continue
+        all_bitrates_known = all(_as_float(rows[index].get("bitrate_mbps")) > 0 for index in indexes)
+        winner = max(
+            indexes,
+            key=lambda index: _webdl_candidate_rank(rows[index], all_bitrates_known),
+        )
+        for index in indexes:
+            if index == winner:
+                continue
+            rows[index]["eligible"] = False
+            rows[index]["rejection_reason"] = (
+                f"同影片 {resolution} 已保留更高码率的 WEB-DL 候选"
+            )
+    return rows
+
+
 def merge_profile(base: Mapping[str, Any], override: Optional[Mapping[str, Any]]) -> dict:
     result = dict(base or {})
     for key, value in (override or {}).items():
@@ -404,6 +441,45 @@ def _candidate_media_id(candidate: Mapping[str, Any], source: str) -> str:
             if data.get(key) not in (None, ""):
                 return str(data[key])
     return ""
+
+
+def _pool_movie_key(candidate: Mapping[str, Any]) -> str:
+    media_keys = [
+        str(value) for value in candidate.get("media_keys") or []
+        if str(value).startswith("movie:")
+    ]
+    if media_keys:
+        return sorted(media_keys)[0]
+
+    for data in (candidate.get("media"), candidate.get("meta")):
+        if not isinstance(data, Mapping):
+            continue
+        for key in ("tmdb_id", "tmdbid", "douban_id", "doubanid", "imdb_id", "imdbid"):
+            if data.get(key) not in (None, ""):
+                return f"{key}:{data[key]}"
+
+    meta = candidate.get("meta") if isinstance(candidate.get("meta"), Mapping) else {}
+    for value in (
+        meta.get("original_name"), meta.get("en_name"), meta.get("name"), meta.get("cn_name")
+    ):
+        normalized = _normalize_media_title(value)
+        if normalized:
+            return normalized
+    return ""
+
+
+def _webdl_candidate_rank(candidate: Mapping[str, Any], all_bitrates_known: bool) -> tuple:
+    primary = (
+        _as_float(candidate.get("bitrate_mbps"))
+        if all_bitrates_known else _as_int(candidate.get("size_bytes"))
+    )
+    return (
+        primary,
+        _as_int(candidate.get("size_bytes")),
+        _as_int(candidate.get("seeders")),
+        str(candidate.get("pubdate") or ""),
+        str(candidate.get("title") or ""),
+    )
 
 
 def _normalize_media_title(value: Any) -> str:

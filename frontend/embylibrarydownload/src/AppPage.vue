@@ -573,6 +573,14 @@ function safeUrl(value) {
   }
 }
 
+function targetPosterUrl(target, item, index) {
+  if (!target?.id || !safeUrl(item?.poster_url)) return ''
+  const rawPosition = item?.position
+  const position = rawPosition !== null && rawPosition !== '' && Number.isInteger(Number(rawPosition))
+    ? Number(rawPosition) : index
+  return `/api/v1/plugin/${encodeURIComponent(pluginId.value)}/poster/${target.id}/${position}`
+}
+
 function qualityLabel(item) {
   return [item.quality_type, item.quality_effect, item.resolution, item.video_codec]
     .filter(value => value && value !== 'unknown').join(' · ') || '未识别'
@@ -734,9 +742,9 @@ onBeforeUnmount(() => {
                 <div class="button-row mt-4"><VBtn color="primary" variant="tonal" prepend-icon="mdi-database-search" @click="quickSearchTarget(target)">匹配已扫描种子</VBtn><VBtn variant="text" @click="showTargetCandidates(target)">查看候选</VBtn><VBtn variant="text" @click="openTarget(target)">编辑规则</VBtn><VBtn variant="text" color="error" @click="deleteTarget(target)">删除清单</VBtn></div>
                 <VDivider class="my-4" />
                 <div class="target-item-grid">
-                  <article v-for="item in target.items || [target]" :key="`${item.media_source}:${item.media_id || item.title}`" class="target-item">
+                  <article v-for="(item, index) in target.items || [target]" :key="`${item.media_source}:${item.media_id || item.title}`" class="target-item">
                     <div class="target-poster-wrap">
-                      <VImg v-if="safeUrl(item.poster_url)" :src="safeUrl(item.poster_url)" :alt="`${item.title} 海报`" aspect-ratio="2/3" cover class="target-poster" loading="lazy" />
+                      <VImg v-if="targetPosterUrl(target, item, index)" :src="targetPosterUrl(target, item, index)" :alt="`${item.title} 海报`" aspect-ratio="2/3" cover class="target-poster" loading="lazy" />
                       <div v-else class="target-poster target-poster-empty" role="img" :aria-label="`${item.title} 暂无海报`"><VIcon icon="mdi-movie-open-outline" size="42" /></div>
                       <div v-if="item.inventory_state === 'present'" class="library-check" aria-label="已在 Emby 媒体库"><VIcon icon="mdi-check-circle" /><span>已入库</span></div>
                     </div>

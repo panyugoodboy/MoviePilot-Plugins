@@ -529,6 +529,14 @@ class PluginStore:
                 (float(bitrate_mbps), utcnow(), candidate_key),
             )
 
+    def reject_candidate(self, candidate_key: str, reason: Any) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE candidates SET eligible=0, rejection_reason=?, updated_at=? "
+                "WHERE candidate_key=?",
+                (str(reason or "媒体库当前不需要此候选"), utcnow(), candidate_key),
+            )
+
     def get_candidate(self, candidate_key: str) -> Optional[dict]:
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM candidates WHERE candidate_key=?", (candidate_key,)).fetchone()
