@@ -72,3 +72,24 @@ def test_all_success_summaries_have_emoji_and_data_layout():
         assert summary["title"][0] in "🔎🌐⬇️🧾"
         assert summary["text"].startswith("📊 数据汇总\n────────────")
         assert "\n🕒 完成时间：" in summary["text"]
+
+
+def test_auto_download_summary_groups_skipped_reasons():
+    skipped = (
+        [{"message": "媒体信息识别失败，未提交下载"}] * 8
+        + [{"message": "WEB-DL 2160p 当前最高码率 10 Mbps，候选 8 Mbps 未提升"}] * 6
+        + [{"message": "WEB-DL 2160p 槽位已有任务在下载中"}] * 3
+        + [{"message": "已达到 3 个版本上限（含下载中）"}]
+    )
+
+    summary = MODULE.build_task_summary(
+        "auto-download", "success",
+        {"requested": 10, "attempted": 28, "submitted": 10, "skipped": skipped},
+    )
+
+    assert "检查后跳过：18" in summary["text"]
+    assert "  ├─ 媒体识别失败：8" in summary["text"]
+    assert "  ├─ 码率没有提升：6" in summary["text"]
+    assert "  ├─ 相同槽位下载中：3" in summary["text"]
+    assert "  └─ 达到版本上限：1" in summary["text"]
+    assert "跳过失败" not in summary["text"]

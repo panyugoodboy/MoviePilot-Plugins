@@ -95,6 +95,21 @@ def build_task_summary(
             ("✅", "合格种子", result.get("eligible")),
             ("⬇️", "提交下载", len(result.get("downloads") or [])),
         ]
+    elif base_name == "auto-download":
+        submitted = result.get("submitted")
+        if submitted is None:
+            submitted = sum(1 for item in result.get("results") or [] if item.get("success"))
+        requested = result.get("requested")
+        if requested is None:
+            requested = len(result.get("results") or [])
+        skipped = result.get("skipped") or []
+        rows = [
+            ("🎯", "计划数量", requested),
+            ("🔍", "检查种子", result.get("attempted", requested)),
+            ("✅", "提交成功", submitted),
+            ("⏭️", "检查后跳过", len(skipped)),
+        ]
+        rows.extend(_skip_reason_rows(skipped))
     else:
         submitted = result.get("submitted")
         if submitted is None:
@@ -109,7 +124,7 @@ def build_task_summary(
             ("🎯", "计划数量", requested),
             ("🔍", "检查种子", result.get("attempted", requested)),
             ("✅", "提交成功", submitted),
-            ("⏭️", "跳过失败", failed),
+            ("❌", "提交失败", failed),
         ]
     return {
         "config_key": config_key,
@@ -127,6 +142,36 @@ def build_test_summary(finished_at: Optional[str] = None) -> dict:
             ("✅", "测试结果", 1),
         ], finished_at),
     }
+
+
+def _skip_reason_rows(skipped: list[Any]) -> list[tuple[str, str, int]]:
+    counts = {
+        "媒体识别失败": 0,
+        "码率没有提升": 0,
+        "相同槽位下载中": 0,
+        "达到版本上限": 0,
+        "其他原因": 0,
+    }
+    for item in skipped:
+        message = str(item.get("message") or "") if isinstance(item, Mapping) else str(item or "")
+        if "媒体信息识别失败" in message or "媒体识别失败" in message \
+                or "无法建立媒体版本键" in message:
+            label = "媒体识别失败"
+        elif "码率" in message and ("未提升" in message or "没有提升" in message):
+            label = "码率没有提升"
+        elif "下载中" in message and ("槽位" in message or "相同质量" in message):
+            label = "相同槽位下载中"
+        elif "版本上限" in message:
+            label = "达到版本上限"
+        else:
+            label = "其他原因"
+        counts[label] += 1
+
+    reasons = [(label, count) for label, count in counts.items() if count]
+    return [
+        ("  └─" if index == len(reasons) - 1 else "  ├─", label, count)
+        for index, (label, count) in enumerate(reasons)
+    ]
 
 
 def _format_rows(rows: list[tuple[str, str, Any]], finished_at: Optional[str]) -> str:
