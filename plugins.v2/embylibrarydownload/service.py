@@ -325,7 +325,9 @@ class LibraryDownloadService:
             downloads = []
             skipped = []
             attempted = 0
-            planned = plan_pool_candidates(self.store.pending_auto_candidates())
+            planned = plan_pool_candidates(self.store.pending_auto_candidates(
+                config.get("pool_sort_by"), config.get("pool_sort_order")
+            ))
             ordered = prioritize_pool_candidates(
                 (candidate for candidate in planned if candidate.get("eligible")),
                 self.store.list_targets(),
@@ -365,7 +367,9 @@ class LibraryDownloadService:
             raise RuntimeError("目标不存在或未启用")
         config = self.config()
         pool_candidates = [
-            candidate for candidate in plan_pool_candidates(self.store.pending_auto_candidates())
+            candidate for candidate in plan_pool_candidates(self.store.pending_auto_candidates(
+                config.get("pool_sort_by"), config.get("pool_sort_order")
+            ))
             if candidate.get("eligible")
         ]
         matched_rows = []

@@ -1,7 +1,7 @@
 {
   "name": "moviepilot-embylibrarydownload-ui",
   "private": true,
-  "version": "0.3.8",
+  "version": "0.3.12",
   "type": "module",
   "scripts": {
     "build": "vite build && node scripts/clean-dist.mjs"

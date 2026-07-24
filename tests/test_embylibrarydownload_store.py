@@ -251,6 +251,48 @@ def test_candidate_pages_are_fixed_to_fifty_and_year_descending(tmp_path):
     assert len(second["items"]) == 5
 
 
+@pytest.mark.parametrize(
+    ("sort_by", "field", "low", "high"),
+    (
+        ("year", "year", 2000, 2026),
+        ("size", "size_bytes", 1, 2),
+        ("seeders", "seeders", 1, 2),
+        ("bitrate", "bitrate_mbps", 10, 20),
+    ),
+)
+def test_candidate_sort_options_control_pool_and_download_order(
+    tmp_path, sort_by, field, low, high
+):
+    store = PluginStore(tmp_path / "state.db")
+    lower = candidate("lower")
+    higher = candidate("higher")
+    lower[field] = low
+    higher[field] = high
+    store.replace_candidates("pool", [lower, higher])
+
+    listed = store.list_candidates(sort_by=sort_by, sort_order="asc")
+    pending = store.pending_auto_candidates(sort_by=sort_by, sort_order="desc")
+
+    assert [item["candidate_key"] for item in listed["items"]] == ["lower", "higher"]
+    assert [item["candidate_key"] for item in pending] == ["higher", "lower"]
+
+
+def test_candidate_rating_sort_uses_media_rating_and_keeps_unknown_last(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    unknown = candidate("unknown")
+    lower = candidate("lower")
+    higher = candidate("higher")
+    lower["media_json"] = dumps({"vote_average": 6.5})
+    higher["media_json"] = dumps({"vote_average": 8.8})
+    store.replace_candidates("pool", [unknown, lower, higher])
+
+    ascending = store.list_candidates(sort_by="rating", sort_order="asc")
+    descending = store.pending_auto_candidates(sort_by="rating", sort_order="desc")
+
+    assert [item["candidate_key"] for item in ascending["items"]] == ["lower", "higher", "unknown"]
+    assert [item["candidate_key"] for item in descending] == ["higher", "lower", "unknown"]
+
+
 def test_pool_candidates_are_filtered_and_counted_by_quality_category(tmp_path):
     store = PluginStore(tmp_path / "state.db")
     rows = []

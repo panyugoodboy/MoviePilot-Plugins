@@ -14,9 +14,9 @@ def test_manifest_matches_plugin_version_and_name():
     entry = manifest["EmbyLibraryDownload"]
 
     assert entry["name"] == "联动EMBY库筛选下载"
-    assert entry["version"] == "0.3.11"
+    assert entry["version"] == "0.3.12"
     assert entry["release"] is True
-    assert 'plugin_version = "0.3.11"' in source
+    assert 'plugin_version = "0.3.12"' in source
     assert '"auto_download_cron": ""' in source
     assert '"proxy_enabled": True' in source
     assert 'plugin_icon = "emby.png"' in source
@@ -69,6 +69,11 @@ def test_manifest_matches_plugin_version_and_name():
     assert '/poster/{target_id}/{position}' in source
     assert 'targetPosterUrl(target, item, index)' in page
     assert 'plan_pool_candidates' in service
+    assert '"pool_sort_by": "year"' in source
+    assert '"pool_sort_order": "desc"' in source
+    assert 'config.get("pool_sort_by"), config.get("pool_sort_order")' in service
+    assert 'v-model="bootstrap.config.pool_sort_by"' in page
+    assert '保存为下载顺序' in page
 
 
 def test_remote_entry_references_existing_build_assets():

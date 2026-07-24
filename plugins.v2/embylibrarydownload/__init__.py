@@ -36,6 +36,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "auto_download": False,
     "pool_auto_download": False,
     "auto_batch_limit": 5,
+    "pool_sort_by": "year",
+    "pool_sort_order": "desc",
     "max_versions": 3,
     "allow_same_slot": False,
     "proxy_enabled": True,
@@ -68,7 +70,7 @@ class EmbyLibraryDownload(_PluginBase):
     plugin_name = "联动EMBY库筛选下载"
     plugin_desc = "以 Emby 实际媒体版本为准，按站点和质量规则搜索、限量并下载资源。"
     plugin_icon = "emby.png"
-    plugin_version = "0.3.11"
+    plugin_version = "0.3.12"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "embylibrarydownload_"
@@ -312,9 +314,14 @@ class EmbyLibraryDownload(_PluginBase):
         site_id: Optional[int] = None,
         eligible_only: bool = True,
         quality_type: str = "",
+        sort_by: str = "",
+        sort_order: str = "",
     ) -> dict:
+        sort_by = sort_by or str(self._config.get("pool_sort_by") or "year")
+        sort_order = sort_order or str(self._config.get("pool_sort_order") or "desc")
         return self._ok(self._require_store().list_candidates(
-            page, page_size, scope, keyword, site_id, eligible_only, quality_type
+            page, page_size, scope, keyword, site_id, eligible_only, quality_type,
+            sort_by, sort_order,
         ))
 
     def _api_refresh_pool(self) -> dict:
@@ -519,6 +526,12 @@ class EmbyLibraryDownload(_PluginBase):
         result["auto_batch_limit"] = max(1, min(50, cls._to_int(result.get("auto_batch_limit"), 5)))
         result["min_size_4k_gb"] = max(0, cls._to_float(result.get("min_size_4k_gb"), 0))
         result["min_size_1080p_gb"] = max(0, cls._to_float(result.get("min_size_1080p_gb"), 0))
+        result["pool_sort_by"] = str(result.get("pool_sort_by") or "year").lower()
+        if result["pool_sort_by"] not in {"year", "rating", "size", "seeders", "bitrate"}:
+            result["pool_sort_by"] = "year"
+        result["pool_sort_order"] = (
+            "asc" if str(result.get("pool_sort_order") or "").lower() == "asc" else "desc"
+        )
         result["exclude_tv"] = cls._to_bool(result.get("exclude_tv"), True)
         result["proxy_enabled"] = cls._to_bool(result.get("proxy_enabled"), True)
         for key in (

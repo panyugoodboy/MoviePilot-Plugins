@@ -29,6 +29,16 @@ JSON_COLUMNS = {
     "webdl_policy_json": "webdl_policy",
     "items_json": "items",
 }
+CANDIDATE_SORT_EXPRESSIONS = {
+    "year": "COALESCE(year, 0)",
+    "rating": (
+        "CASE WHEN json_valid(media_json) "
+        "THEN COALESCE(CAST(json_extract(media_json, '$.vote_average') AS REAL), 0) ELSE 0 END"
+    ),
+    "size": "COALESCE(size_bytes, 0)",
+    "seeders": "COALESCE(seeders, 0)",
+    "bitrate": "COALESCE(bitrate_mbps, 0)",
+}
 
 
 def utcnow() -> str:
@@ -579,6 +589,8 @@ class PluginStore:
         site_id: Optional[int] = None,
         eligible_only: bool = True,
         quality_type: str = "",
+        sort_by: str = "year",
+        sort_order: str = "desc",
     ) -> dict:
         page, page_size = _page_values(page, page_size)
         clauses, params = ["scope=?"], [scope]
@@ -596,6 +608,7 @@ class PluginStore:
             clauses.append("quality_type=?")
             params.append(str(quality_type))
         where = " WHERE " + " AND ".join(clauses)
+        order_by = _candidate_order_by(sort_by, sort_order)
         with self.connect() as conn:
             quality_counts = {
                 row["quality_type"]: row["total"]
@@ -607,13 +620,7 @@ class PluginStore:
             total = conn.execute(f"SELECT COUNT(*) FROM candidates{where}", params).fetchone()[0]
             rows = conn.execute(
                 f"SELECT * FROM candidates{where} "
-                "ORDER BY COALESCE(year, 0) DESC, "
-                "COALESCE(quality_score, 0) / 1000000000 DESC, "
-                "CASE WHEN quality_type='webdl' THEN COALESCE(bitrate_mbps, 0) "
-                "ELSE COALESCE(quality_score, 0) % 1000000000 END DESC, "
-                "CASE WHEN quality_type='webdl' AND COALESCE(bitrate_mbps, 0)=0 "
-                "THEN COALESCE(size_bytes, 0) ELSE 0 END DESC, "
-                "seeders DESC, title "
+                f"ORDER BY {order_by} "
                 "LIMIT ? OFFSET ?",
                 [*params, page_size, (page - 1) * page_size],
             ).fetchall()
@@ -625,10 +632,13 @@ class PluginStore:
             "quality_counts": quality_counts,
         }
 
-    def pending_auto_candidates(self) -> list[dict]:
+    def pending_auto_candidates(
+        self, sort_by: str = "year", sort_order: str = "desc"
+    ) -> list[dict]:
+        order_by = _candidate_order_by(sort_by, sort_order)
         with self.connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT candidate.* FROM candidates AS candidate
                 WHERE scope='pool' AND eligible=1
                   AND NOT EXISTS (
@@ -636,13 +646,7 @@ class PluginStore:
                     WHERE job.torrent_key=candidate.torrent_key
                       AND job.status IN (?,?,?,?,?)
                   )
-                ORDER BY COALESCE(year, 0) DESC,
-                         COALESCE(quality_score, 0) / 1000000000 DESC,
-                         CASE WHEN quality_type='webdl' THEN COALESCE(bitrate_mbps, 0)
-                              ELSE COALESCE(quality_score, 0) % 1000000000 END DESC,
-                         CASE WHEN quality_type='webdl' AND COALESCE(bitrate_mbps, 0)=0
-                              THEN COALESCE(size_bytes, 0) ELSE 0 END DESC,
-                         seeders DESC, title
+                ORDER BY {order_by}
                 """,
                 DUPLICATE_JOB_STATES,
             ).fetchall()
@@ -1250,3 +1254,20 @@ def _float(value: Any) -> float:
         return float(value or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _candidate_order_by(sort_by: Any, sort_order: Any) -> str:
+    expression = CANDIDATE_SORT_EXPRESSIONS.get(str(sort_by or "").lower())
+    if not expression:
+        expression = CANDIDATE_SORT_EXPRESSIONS["year"]
+    direction = "ASC" if str(sort_order or "").lower() == "asc" else "DESC"
+    return (
+        f"CASE WHEN ({expression}) > 0 THEN 0 ELSE 1 END ASC, "
+        f"({expression}) {direction}, "
+        "COALESCE(quality_score, 0) / 1000000000 DESC, "
+        "CASE WHEN quality_type='webdl' THEN COALESCE(bitrate_mbps, 0) "
+        "ELSE COALESCE(quality_score, 0) % 1000000000 END DESC, "
+        "CASE WHEN quality_type='webdl' AND COALESCE(bitrate_mbps, 0)=0 "
+        "THEN COALESCE(size_bytes, 0) ELSE 0 END DESC, "
+        "COALESCE(seeders, 0) DESC, title"
+    )

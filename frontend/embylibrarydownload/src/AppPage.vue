@@ -17,6 +17,7 @@ const bootstrap = reactive({
   config: {
     quality_save_paths: {}, exclude_tv: true, proxy_enabled: true,
     min_size_4k_gb: 0, min_size_1080p_gb: 0,
+    pool_sort_by: 'year', pool_sort_order: 'desc',
   },
   options: { sites: [], emby_servers: [] },
   stats: {},
@@ -61,6 +62,17 @@ const poolQualityItems = [
   { title: 'DIY 原盘', value: 'diy' },
   { title: 'Encode', value: 'encode' },
 ]
+const poolSortItems = [
+  { title: '年份', value: 'year' },
+  { title: '评分', value: 'rating' },
+  { title: '体积', value: 'size' },
+  { title: '做种人数', value: 'seeders' },
+  { title: '码率', value: 'bitrate' },
+]
+const poolSortOrderItems = [
+  { title: '从高到低', value: 'desc' },
+  { title: '从低到高', value: 'asc' },
+]
 const candidateScopeLabel = computed(() => {
   if (candidates.scope === 'pool') {
     const category = poolQualityItems.find(item => item.value === candidates.quality_type)
@@ -100,6 +112,7 @@ const candidateHeaders = [
   { title: '年份', key: 'year', width: 80 },
   { title: '种子', key: 'title', minWidth: 320, sortable: false },
   { title: '站点', key: 'site_name', width: 120 },
+  { title: '评分', key: 'rating', width: 80, sortable: false },
   { title: '质量', key: 'quality_label', minWidth: 210, sortable: false },
   { title: '码率', key: 'bitrate_mbps', width: 90 },
   { title: '大小', key: 'size_bytes', width: 100, sortable: false },
@@ -199,6 +212,8 @@ async function loadCandidates() {
       site_id: candidates.site_id || undefined,
       eligible_only: true,
       quality_type: candidates.scope === 'pool' ? candidates.quality_type : undefined,
+      sort_by: candidates.scope === 'pool' ? bootstrap.config.pool_sort_by : undefined,
+      sort_order: candidates.scope === 'pool' ? bootstrap.config.pool_sort_order : undefined,
     })
     Object.assign(candidates, {
       items: data.items,
@@ -519,6 +534,11 @@ async function saveSettings() {
   }
 }
 
+async function savePoolSort() {
+  candidates.page = 1
+  if (await saveSettings()) await loadCandidates()
+}
+
 async function testNotification() {
   notificationTesting.value = true
   try {
@@ -760,7 +780,7 @@ onBeforeUnmount(() => {
       <VWindowItem value="pool">
         <section aria-labelledby="pool-title">
           <div class="section-heading">
-            <div><h2 id="pool-title">{{ candidateScopeLabel }}</h2><p>{{ candidates.scope === 'pool' ? '按 UBits 的 WEB-DL、Remux、DIY 原盘、Encode 分类扫描全部页面；列表固定每页 50 条并按年份倒序。' : '这里展示目标快速搜索得到的站点候选；搜索结束后会自动刷新。' }}</p></div>
+            <div><h2 id="pool-title">{{ candidateScopeLabel }}</h2><p>{{ candidates.scope === 'pool' ? '按 UBits 的 WEB-DL、Remux、DIY 原盘、Encode 分类扫描全部页面；列表固定每页 50 条，可自定义排序并保存为自动下载顺序。' : '这里展示目标快速搜索得到的站点候选；搜索结束后会自动刷新。' }}</p></div>
             <div class="button-row"><VBtn v-if="candidates.scope !== 'pool'" class="action-btn" variant="text" @click="candidates.scope='pool'; candidates.page=1; loadCandidates()">返回全站</VBtn><VBtn class="action-btn" color="primary" prepend-icon="mdi-radar" :loading="poolTask?.status === 'running'" @click="runTask('/pool/refresh', 'UBits 电影分类刷新已开始')">刷新 UBits 电影分类</VBtn></div>
           </div>
           <VAlert v-if="candidates.scope !== 'pool' && targetTask && ['running','failed'].includes(targetTask.status)" :type="targetTask.status === 'failed' ? 'error' : 'info'" variant="tonal" class="mb-4"><strong>{{ targetTask.status === 'running' ? '正在快速搜索目标站点资源…' : `搜索失败：${targetTask.message}` }}</strong><VProgressLinear v-if="targetTask.status === 'running'" indeterminate color="primary" class="mt-2" /></VAlert>
@@ -782,7 +802,10 @@ onBeforeUnmount(() => {
           <div class="filter-row">
             <VTextField v-model="candidates.keyword" label="搜索种子标题" prepend-inner-icon="mdi-magnify" clearable hide-details @keyup.enter="loadCandidates" />
             <VSelect v-model="candidates.site_id" label="站点" :items="siteItems" item-title="name" item-value="id" clearable hide-details />
+            <VSelect v-if="candidates.scope === 'pool'" v-model="bootstrap.config.pool_sort_by" label="排序字段" :items="poolSortItems" hide-details />
+            <VSelect v-if="candidates.scope === 'pool'" v-model="bootstrap.config.pool_sort_order" label="排序方向" :items="poolSortOrderItems" hide-details />
             <VBtn class="action-btn" variant="tonal" @click="loadCandidates">筛选</VBtn>
+            <VBtn v-if="candidates.scope === 'pool'" class="action-btn" color="primary" variant="tonal" @click="savePoolSort">保存为下载顺序</VBtn>
           </div>
           <div class="selection-bar">
             <VCheckbox :model-value="allPageSelected" :indeterminate="selectedCandidates.length > 0 && !allPageSelected" hide-details label="当前页全选" @update:model-value="togglePageSelection" />
@@ -793,6 +816,7 @@ onBeforeUnmount(() => {
           <div class="desktop-table">
             <VDataTableServer v-model="selectedCandidates" show-select item-value="candidate_key" :headers="candidateHeaders" :items="candidates.items" :items-length="candidates.total" :items-per-page="50" :page="candidates.page" fixed-header hover @update:page="value => { candidates.page = value; loadCandidates() }">
               <template #item.title="{ item }"><a v-if="safeUrl(item.page_url)" :href="safeUrl(item.page_url)" target="_blank" rel="noopener noreferrer">{{ item.title }}</a><span v-else>{{ item.title }}</span></template>
+              <template #item.rating="{ item }">{{ Number(item.media?.vote_average || 0) ? Number(item.media.vote_average).toFixed(1) : '未知' }}</template>
               <template #item.quality_label="{ item }"><VChip size="small" variant="tonal" color="primary">{{ qualityLabel(item) }}</VChip></template>
               <template #item.bitrate_mbps="{ item }">{{ item.bitrate_mbps ? `${item.bitrate_mbps}M` : '未知' }}</template>
               <template #item.size_bytes="{ item }">{{ formatBytes(item.size_bytes) }}</template>
@@ -801,7 +825,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="mobile-list">
             <VCard v-for="item in candidates.items" :key="item.candidate_key" variant="outlined" class="mobile-card">
-              <VCardText><VCheckbox v-model="selectedCandidates" :value="item.candidate_key" hide-details :label="`${item.year || '年份未知'} · ${item.site_name}`" /><a v-if="safeUrl(item.page_url)" :href="safeUrl(item.page_url)" target="_blank" rel="noopener noreferrer" class="mobile-title">{{ item.title }}</a><div class="chip-row"><VChip size="small">{{ qualityLabel(item) }}</VChip><VChip size="small" variant="text">{{ formatBytes(item.size_bytes) }}</VChip><VChip size="small" variant="text">{{ item.seeders }} 做种</VChip></div></VCardText>
+              <VCardText><VCheckbox v-model="selectedCandidates" :value="item.candidate_key" hide-details :label="`${item.year || '年份未知'} · ${item.site_name}`" /><a v-if="safeUrl(item.page_url)" :href="safeUrl(item.page_url)" target="_blank" rel="noopener noreferrer" class="mobile-title">{{ item.title }}</a><div class="chip-row"><VChip size="small">{{ qualityLabel(item) }}</VChip><VChip size="small" variant="text">评分 {{ Number(item.media?.vote_average || 0) ? Number(item.media.vote_average).toFixed(1) : '未知' }}</VChip><VChip size="small" variant="text">{{ formatBytes(item.size_bytes) }}</VChip><VChip size="small" variant="text">{{ item.seeders }} 做种</VChip></div></VCardText>
             </VCard>
             <VPagination v-model="candidates.page" :length="Math.max(1, Math.ceil(candidates.total / 50))" @update:model-value="loadCandidates" />
           </div>
@@ -856,6 +880,8 @@ onBeforeUnmount(() => {
                 <div class="settings-grid">
                   <VSelect v-model="bootstrap.config.max_versions" label="普通版本上限（WEB-DL固定槽位除外）" :items="[1,2,3]" />
                   <VTextField v-model.number="bootstrap.config.auto_batch_limit" type="number" min="1" max="50" label="每次自动下载数量" hint="扫描完成和自动下载 Cron 均使用此数量；范围 1–50" persistent-hint />
+                  <VSelect v-model="bootstrap.config.pool_sort_by" label="种子池与自动下载排序" :items="poolSortItems" />
+                  <VSelect v-model="bootstrap.config.pool_sort_order" label="种子池与自动下载方向" :items="poolSortOrderItems" />
                   <VSelect v-model="bootstrap.config.sites" label="搜索站点（种子池仅使用 UBits）" :items="siteItems" item-title="name" item-value="id" multiple chips closable-chips />
                   <VSelect v-model="bootstrap.config.emby_servers" label="Emby 服务" :items="serverItems" multiple chips closable-chips />
                   <VTextField v-model="bootstrap.config.movie_save_path" label="电影下载保存路径" hint="留空使用 MoviePilot 默认目录；支持 storage:/path" persistent-hint />
