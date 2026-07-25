@@ -46,6 +46,7 @@ from .sources import (
 )
 from .replacement import cleanup_old_webdl_version, verify_new_webdl_version
 from .recognition import build_recognition_attempts
+from .qb_repair import build_qb_path_repair_plan
 from .store import PluginStore, dumps
 
 
@@ -560,6 +561,66 @@ class LibraryDownloadService:
             "failed": requested - submitted - len(cleaned_ids),
             "results": results,
         }
+
+    def repair_qb_temporary_paths(self, dry_run: bool = True) -> dict:
+        from app.helper.downloader import DownloaderHelper
+
+        active_ids = self.store.active_download_ids()
+        services = DownloaderHelper().get_services(type_filter="qbittorrent")
+        result = {
+            "dry_run": bool(dry_run),
+            "active_jobs": len(active_ids),
+            "matched": 0,
+            "repaired": 0,
+            "started": 0,
+            "services": [],
+            "errors": [],
+        }
+        for name, service in (services or {}).items():
+            try:
+                downloader = service.instance
+                preferences = downloader.qbc.app_preferences()
+                temp_path = str(preferences.get("temp_path") or "/临时")
+                temp_enabled = bool(preferences.get("temp_path_enabled"))
+                torrents, error = downloader.get_torrents()
+                if error:
+                    raise RuntimeError(str(error))
+                plan = build_qb_path_repair_plan(torrents or [], active_ids, temp_path)
+                matched = sum(len(group["hashes"]) for group in plan)
+                service_result = {
+                    "name": name,
+                    "temp_path": temp_path,
+                    "temp_path_enabled": temp_enabled,
+                    "matched": matched,
+                    "repaired": 0,
+                    "started": 0,
+                    "destinations": [
+                        {"save_path": group["save_path"], "count": len(group["hashes"])}
+                        for group in plan
+                    ],
+                    "samples": [title for group in plan for title in group["titles"]][:5],
+                }
+                result["matched"] += matched
+                if not dry_run and matched:
+                    if temp_enabled:
+                        raise RuntimeError("qB 临时目录仍处于启用状态，已停止迁移")
+                    repaired_hashes = []
+                    for group in plan:
+                        downloader.qbc.torrents_set_location(
+                            location=group["save_path"], torrent_hashes=group["hashes"]
+                        )
+                        repaired_hashes.extend(group["hashes"])
+                    service_result["repaired"] = len(repaired_hashes)
+                    result["repaired"] += len(repaired_hashes)
+                    if repaired_hashes and downloader.start_torrents(ids=repaired_hashes):
+                        service_result["started"] = len(repaired_hashes)
+                        result["started"] += len(repaired_hashes)
+                result["services"].append(service_result)
+            except Exception as error:
+                message = f"{name}: {error}"
+                logger.error(f"[联动EMBY库筛选下载] 修复 qB 临时路径失败：{message}")
+                result["errors"].append(message)
+        return result
 
     def _dispatch_one(
         self,

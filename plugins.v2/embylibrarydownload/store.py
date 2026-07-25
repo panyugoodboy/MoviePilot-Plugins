@@ -775,6 +775,16 @@ class PluginStore:
                 (status, _none(download_id), _none(error), utcnow(), job_id),
             )
 
+    def active_download_ids(self) -> set[str]:
+        marks = ",".join("?" for _ in ACTIVE_JOB_STATES)
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"SELECT download_id FROM download_jobs "
+                f"WHERE status IN ({marks}) AND download_id IS NOT NULL",
+                ACTIVE_JOB_STATES,
+            ).fetchall()
+        return {str(row["download_id"]).lower() for row in rows if row["download_id"]}
+
     def cancel_job(self, job_id: int) -> tuple[bool, str]:
         with self.connect() as conn:
             row = conn.execute("SELECT status FROM download_jobs WHERE id=?", (job_id,)).fetchone()

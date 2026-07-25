@@ -368,6 +368,17 @@ def test_pending_auto_candidates_exclude_torrents_already_added_to_downloads(tmp
     assert store.pending_auto_candidate_keys() == ["next"]
 
 
+def test_active_download_ids_only_returns_jobs_still_managed_by_downloader(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    store.replace_candidates("pool", [candidate("active"), candidate("failed")])
+    active_id, _ = store.reserve_download("active", ["movie:themoviedb:100"], 3, None, True)
+    failed_id, _ = store.reserve_download("failed", ["movie:themoviedb:101"], 3, None, True)
+    store.update_job(active_id, "queued", download_id="ABC123")
+    store.update_job(failed_id, "failed", download_id="DEF456", error="failed")
+
+    assert store.active_download_ids() == {"abc123"}
+
+
 def test_inventory_rejected_candidate_is_not_retried_until_next_scan(tmp_path):
     store = PluginStore(tmp_path / "state.db")
     store.replace_candidates("pool", [candidate("not-needed"), candidate("needed")])
