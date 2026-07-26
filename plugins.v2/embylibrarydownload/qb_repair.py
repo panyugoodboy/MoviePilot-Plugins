@@ -8,21 +8,25 @@ from typing import Any, Iterable, Mapping
 def build_qb_path_repair_plan(
     torrents: Iterable[Mapping[str, Any]],
     active_download_ids: Iterable[str],
-    temp_path: str,
 ) -> list[dict]:
     active_ids = {str(value).lower() for value in active_download_ids if value}
-    temp_root = _normalize_path(temp_path)
-    if not active_ids or not temp_root or temp_root == "/":
+    if not active_ids:
         return []
 
     groups: dict[str, dict[str, list[str]]] = {}
     for torrent in torrents:
         torrent_hash = str(torrent.get("hash") or "").lower()
         content_path = _normalize_path(torrent.get("content_path"))
+        download_path = _normalize_path(torrent.get("download_path"))
         save_path = _normalize_path(torrent.get("save_path"))
-        if torrent_hash not in active_ids or not _inside(content_path, temp_root):
+        if (
+            torrent_hash not in active_ids
+            or not download_path
+            or download_path == "/"
+            or not _inside(content_path, download_path)
+        ):
             continue
-        if not save_path or _inside(save_path, temp_root):
+        if not save_path or save_path == download_path or _inside(save_path, download_path):
             continue
         group = groups.setdefault(save_path, {"hashes": [], "titles": []})
         group["hashes"].append(torrent_hash)

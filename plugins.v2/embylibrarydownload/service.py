@@ -585,7 +585,7 @@ class LibraryDownloadService:
                 torrents, error = downloader.get_torrents()
                 if error:
                     raise RuntimeError(str(error))
-                plan = build_qb_path_repair_plan(torrents or [], active_ids, temp_path)
+                plan = build_qb_path_repair_plan(torrents or [], active_ids)
                 matched = sum(len(group["hashes"]) for group in plan)
                 service_result = {
                     "name": name,
@@ -606,8 +606,8 @@ class LibraryDownloadService:
                         raise RuntimeError("qB 临时目录仍处于启用状态，已停止迁移")
                     repaired_hashes = []
                     for group in plan:
-                        downloader.qbc.torrents_set_location(
-                            location=group["save_path"], torrent_hashes=group["hashes"]
+                        downloader.qbc.torrents_set_download_path(
+                            download_path=group["save_path"], torrent_hashes=group["hashes"]
                         )
                         repaired_hashes.extend(group["hashes"])
                     service_result["repaired"] = len(repaired_hashes)

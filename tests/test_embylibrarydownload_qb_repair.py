@@ -22,23 +22,26 @@ def test_repair_plan_only_includes_active_jobs_still_using_temp_path():
             "hash": "broken",
             "name": "Broken Movie",
             "content_path": "/临时/Broken Movie.mkv",
+            "download_path": "/临时/",
             "save_path": "/G3/web/",
         },
         {
             "hash": "direct",
             "name": "Direct Movie",
             "content_path": "/G3/web/Direct Movie.mkv",
+            "download_path": "/G3/web/",
             "save_path": "/G3/web/",
         },
         {
             "hash": "other-plugin",
             "name": "Other Movie",
             "content_path": "/临时/Other Movie.mkv",
+            "download_path": "/临时/",
             "save_path": "/G3/web/",
         },
     ]
 
-    plan = build_qb_path_repair_plan(torrents, {"broken", "direct"}, "/临时/")
+    plan = build_qb_path_repair_plan(torrents, {"broken", "direct"})
 
     assert plan == [
         {
@@ -51,8 +54,32 @@ def test_repair_plan_only_includes_active_jobs_still_using_temp_path():
 
 def test_repair_plan_rejects_empty_or_same_temp_destination():
     torrents = [
-        {"hash": "empty", "content_path": "/临时/a.mkv", "save_path": ""},
-        {"hash": "same", "content_path": "/临时/b.mkv", "save_path": "/临时/"},
+        {
+            "hash": "empty",
+            "content_path": "/临时/a.mkv",
+            "download_path": "/临时",
+            "save_path": "",
+        },
+        {
+            "hash": "same",
+            "content_path": "/临时/b.mkv",
+            "download_path": "/临时",
+            "save_path": "/临时/",
+        },
     ]
 
-    assert build_qb_path_repair_plan(torrents, {"empty", "same"}, "/临时") == []
+    assert build_qb_path_repair_plan(torrents, {"empty", "same"}) == []
+
+
+def test_repair_plan_uses_torrent_download_path_after_global_temp_path_changed():
+    torrents = [{
+        "hash": "broken",
+        "name": "Broken Movie",
+        "content_path": "/临时/Broken Movie.mkv",
+        "download_path": "/临时",
+        "save_path": "/G3/web",
+    }]
+
+    plan = build_qb_path_repair_plan(torrents, {"broken"})
+
+    assert plan[0]["hashes"] == ["broken"]
