@@ -494,6 +494,38 @@ def test_obsolete_failed_jobs_are_cleaned_for_slot_and_version_cap(tmp_path):
     assert [item["id"] for item in store.list_jobs()["items"]] == list(reversed(active_jobs))
 
 
+def test_obsolete_failed_cleanup_uses_bulk_inventory_snapshot(tmp_path, monkeypatch):
+    store = PluginStore(tmp_path / "state.db")
+    store.replace_candidates("pool", [candidate("obsolete", "remux:dv:2160p")])
+    job_id, reason = store.reserve_download(
+        "obsolete", ["movie:themoviedb:503"], 3, None, False
+    )
+    assert job_id and not reason
+    store.update_job(job_id, "failed", error="下载种子内容为空")
+    store.replace_inventory("Emby", [
+        inventory_row("existing", "movie:themoviedb:503", "remux:dv:2160p"),
+    ])
+
+    def unexpected_per_job_query(*_args, **_kwargs):
+        raise AssertionError("failed-job cleanup must not query inventory once per job")
+
+    monkeypatch.setattr(store, "inventory_version_count", unexpected_per_job_query)
+
+    assert store.cleanup_obsolete_failed_jobs(3, False) == [job_id]
+
+
+def test_download_jobs_has_torrent_status_cleanup_index(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+
+    with store.connect() as conn:
+        columns = [
+            row["name"]
+            for row in conn.execute("PRAGMA index_info(ix_download_jobs_torrent_status)")
+        ]
+
+    assert columns == ["torrent_key", "status"]
+
+
 def test_target_scanned_pool_preference_is_saved_and_defaults_off(tmp_path):
     store = PluginStore(tmp_path / "state.db")
     target = store.save_target({"title": "Movie", "auto_download": True})

@@ -194,6 +194,8 @@ class PluginStore:
                     ON download_jobs(status, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS ix_download_jobs_candidate
                     ON download_jobs(candidate_key);
+                CREATE INDEX IF NOT EXISTS ix_download_jobs_torrent_status
+                    ON download_jobs(torrent_key, status);
 
                 CREATE TABLE IF NOT EXISTS plugin_state (
                     key TEXT PRIMARY KEY,
@@ -884,7 +886,7 @@ class PluginStore:
                 params,
             ).fetchall()
             active_jobs = conn.execute(
-                "SELECT torrent_key, media_keys_json, quality_slot, status "
+                "SELECT id, torrent_key, media_keys_json, quality_slot, status "
                 "FROM download_jobs WHERE status IN (?,?,?,?,?)",
                 DUPLICATE_JOB_STATES,
             ).fetchall()
@@ -892,9 +894,58 @@ class PluginStore:
                 int(row["id"]): max(1, min(3, int(row["desired_versions"])))
                 for row in conn.execute("SELECT id, desired_versions FROM targets").fetchall()
             }
+            inventory_versions: dict[str, set[str]] = {}
+            inventory_slots: dict[str, set[str]] = {}
+            for row in conn.execute(
+                "SELECT media_key, version_key, quality_slot FROM inventory_versions"
+            ).fetchall():
+                inventory_versions.setdefault(row["media_key"], set()).add(row["version_key"])
+                if row["quality_slot"]:
+                    inventory_slots.setdefault(row["media_key"], set()).add(row["quality_slot"])
+
+            active_torrent_keys = {row["torrent_key"] for row in active_jobs}
+            active_entries = []
+            active_movie_jobs: dict[str, dict[int, Optional[str]]] = {}
+            for row in active_jobs:
+                if row["status"] not in ACTIVE_JOB_STATES:
+                    continue
+                media_keys = tuple(dict.fromkeys(_loads(row["media_keys_json"], [])))
+                active_entries.append((int(row["id"]), row["quality_slot"], media_keys))
+                for media_key in media_keys:
+                    if media_key.startswith("movie:"):
+                        active_movie_jobs.setdefault(media_key, {})[int(row["id"])] = row["quality_slot"]
+
+            def inventory_count(media_key: str) -> int:
+                if media_key.startswith("tv:") and not _is_tv_episode_key(media_key):
+                    prefix = f"{media_key}E" if _is_tv_season_key(media_key) else f"{media_key}:"
+                    return max(
+                        (len(versions) for key, versions in inventory_versions.items()
+                         if key.startswith(prefix)),
+                        default=0,
+                    )
+                return len(inventory_versions.get(media_key, ()))
+
+            def inventory_has_slot(media_key: str, slot: str) -> bool:
+                if media_key.startswith("tv:") and not _is_tv_episode_key(media_key):
+                    prefix = f"{media_key}E" if _is_tv_season_key(media_key) else f"{media_key}:"
+                    return any(
+                        slot in slots for key, slots in inventory_slots.items()
+                        if key.startswith(prefix)
+                    )
+                return slot in inventory_slots.get(media_key, ())
+
+            def overlapping_active(media_key: str) -> list[Optional[str]]:
+                if media_key.startswith("movie:"):
+                    return list(active_movie_jobs.get(media_key, {}).values())
+                return [
+                    quality_slot
+                    for _, quality_slot, active_keys in active_entries
+                    if any(_keys_overlap(media_key, active_key) for active_key in active_keys)
+                ]
+
             cleaned_ids = []
             for job in failed_jobs:
-                if any(active["torrent_key"] == job["torrent_key"] for active in active_jobs):
+                if job["torrent_key"] in active_torrent_keys:
                     cleaned_ids.append(int(job["id"]))
                     continue
                 if _loads(job["webdl_policy_json"], {}):
@@ -904,28 +955,13 @@ class PluginStore:
                 if job["target_id"] is not None:
                     cap = min(cap, target_caps.get(int(job["target_id"]), cap))
                 obsolete = any(
-                    self.inventory_version_count(media_key, conn) + sum(
-                        1 for active in active_jobs
-                        if active["status"] in ACTIVE_JOB_STATES
-                        and any(
-                            _keys_overlap(media_key, active_key)
-                            for active_key in _loads(active["media_keys_json"], [])
-                        )
-                    ) >= cap
+                    inventory_count(media_key) + len(overlapping_active(media_key)) >= cap
                     for media_key in media_keys
                 )
                 if not obsolete and job["quality_slot"] and not allow_same_slot:
                     obsolete = any(
-                        _inventory_has_slot(conn, media_key, job["quality_slot"])
-                        or any(
-                            active["status"] in ACTIVE_JOB_STATES
-                            and active["quality_slot"] == job["quality_slot"]
-                            and any(
-                                _keys_overlap(media_key, active_key)
-                                for active_key in _loads(active["media_keys_json"], [])
-                            )
-                            for active in active_jobs
-                        )
+                        inventory_has_slot(media_key, job["quality_slot"])
+                        or job["quality_slot"] in overlapping_active(media_key)
                         for media_key in media_keys
                     )
                 if obsolete:
