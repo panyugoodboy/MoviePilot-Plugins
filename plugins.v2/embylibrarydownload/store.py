@@ -849,9 +849,12 @@ class PluginStore:
             clauses.append(f"failed.id IN ({','.join('?' for _ in ids)})")
             params.extend(ids)
         clauses.append(
-            "EXISTS (SELECT 1 FROM download_jobs AS active "
+            "(EXISTS (SELECT 1 FROM download_jobs AS active "
             "WHERE active.torrent_key=failed.torrent_key "
-            f"AND active.status IN ({','.join('?' for _ in DUPLICATE_JOB_STATES)}))"
+            f"AND active.status IN ({','.join('?' for _ in DUPLICATE_JOB_STATES)})) "
+            "OR EXISTS (SELECT 1 FROM download_jobs AS newer "
+            "WHERE newer.candidate_key=failed.candidate_key "
+            "AND newer.status='failed' AND newer.id>failed.id))"
         )
         params.extend(DUPLICATE_JOB_STATES)
         with self.connect() as conn:
@@ -886,7 +889,8 @@ class PluginStore:
                 params,
             ).fetchall()
             active_jobs = conn.execute(
-                "SELECT id, torrent_key, media_keys_json, quality_slot, status "
+                "SELECT id, torrent_key, media_keys_json, quality_slot, "
+                "webdl_policy_json, status "
                 "FROM download_jobs WHERE status IN (?,?,?,?,?)",
                 DUPLICATE_JOB_STATES,
             ).fetchall()
@@ -894,14 +898,28 @@ class PluginStore:
                 int(row["id"]): max(1, min(3, int(row["desired_versions"])))
                 for row in conn.execute("SELECT id, desired_versions FROM targets").fetchall()
             }
+            webdl_candidates = {
+                row["candidate_key"]: row
+                for row in conn.execute(
+                    "SELECT candidate_key, resolution, bitrate_mbps FROM candidates "
+                    "WHERE quality_type='webdl'"
+                ).fetchall()
+            }
             inventory_versions: dict[str, set[str]] = {}
             inventory_slots: dict[str, set[str]] = {}
+            inventory_webdl_bitrates: dict[tuple[str, str], float] = {}
             for row in conn.execute(
-                "SELECT media_key, version_key, quality_slot FROM inventory_versions"
+                "SELECT media_key, version_key, quality_slot, quality_type, "
+                "resolution, bitrate_mbps FROM inventory_versions"
             ).fetchall():
                 inventory_versions.setdefault(row["media_key"], set()).add(row["version_key"])
                 if row["quality_slot"]:
                     inventory_slots.setdefault(row["media_key"], set()).add(row["quality_slot"])
+                if row["quality_type"] == "webdl" and row["resolution"]:
+                    key = (row["media_key"], str(row["resolution"]).lower())
+                    inventory_webdl_bitrates[key] = max(
+                        inventory_webdl_bitrates.get(key, 0.0), _float(row["bitrate_mbps"])
+                    )
 
             active_torrent_keys = {row["torrent_key"] for row in active_jobs}
             active_entries = []
@@ -948,9 +966,35 @@ class PluginStore:
                 if job["torrent_key"] in active_torrent_keys:
                     cleaned_ids.append(int(job["id"]))
                     continue
-                if _loads(job["webdl_policy_json"], {}):
-                    continue
+                webdl_policy = _loads(job["webdl_policy_json"], {})
                 media_keys = _loads(job["media_keys_json"], [])
+                webdl_candidate = webdl_candidates.get(job["candidate_key"])
+                if webdl_policy or webdl_candidate:
+                    resolution = str(
+                        webdl_policy.get("resolution")
+                        or (webdl_candidate and webdl_candidate["resolution"])
+                        or ""
+                    ).lower()
+                    candidate_bitrate = _float(
+                        webdl_policy.get("candidate_bitrate_mbps")
+                        or (webdl_candidate and webdl_candidate["bitrate_mbps"])
+                    )
+                    obsolete = any(
+                        active["status"] != "present"
+                        and _active_job_has_webdl_slot(active, media_keys, resolution)
+                        for active in active_jobs
+                    )
+                    if not obsolete and candidate_bitrate > 0:
+                        obsolete = any(
+                            inventory_webdl_bitrates.get((media_key, resolution), 0.0)
+                            >= candidate_bitrate
+                            for media_key in media_keys
+                        )
+                    if obsolete:
+                        cleaned_ids.append(int(job["id"]))
+                        continue
+                    if webdl_policy:
+                        continue
                 cap = max(1, min(3, int(max_versions)))
                 if job["target_id"] is not None:
                     cap = min(cap, target_caps.get(int(job["target_id"]), cap))

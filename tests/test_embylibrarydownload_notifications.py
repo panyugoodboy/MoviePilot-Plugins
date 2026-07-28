@@ -93,3 +93,15 @@ def test_auto_download_summary_groups_skipped_reasons():
     assert "  ├─ 相同槽位下载中：3" in summary["text"]
     assert "  └─ 达到版本上限：1" in summary["text"]
     assert "跳过失败" not in summary["text"]
+
+
+def test_retry_summary_reports_cleaned_obsolete_jobs_separately():
+    summary = MODULE.build_task_summary(
+        "downloads", "success",
+        {"requested": 91, "attempted": 2, "submitted": 0, "cleaned": 89, "failed": 2},
+    )
+
+    assert "计划数量：91" in summary["text"]
+    assert "检查种子：2" in summary["text"]
+    assert "清理过期：89" in summary["text"]
+    assert "提交失败：2" in summary["text"]

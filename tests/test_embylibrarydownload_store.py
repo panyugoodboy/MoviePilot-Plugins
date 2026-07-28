@@ -458,6 +458,24 @@ def test_list_jobs_cleans_old_failed_rows_when_same_torrent_is_active(tmp_path):
     assert [item["id"] for item in page["items"]] == [active_id]
 
 
+def test_list_jobs_keeps_only_newest_duplicate_failed_attempt(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    store.replace_candidates("pool", [candidate("duplicate-failed")])
+    failed_ids = []
+    for _ in range(2):
+        job_id, reason = store.reserve_download(
+            "duplicate-failed", ["movie:themoviedb:450"], 3, None, False
+        )
+        assert job_id and not reason
+        store.update_job(job_id, "failed", error="下载种子内容为空")
+        failed_ids.append(job_id)
+
+    page = store.list_jobs()
+
+    assert page["cleaned_count"] == 1
+    assert [item["id"] for item in page["items"]] == [failed_ids[-1]]
+
+
 def test_obsolete_failed_jobs_are_cleaned_for_slot_and_version_cap(tmp_path):
     store = PluginStore(tmp_path / "state.db")
     rows = [
@@ -492,6 +510,104 @@ def test_obsolete_failed_jobs_are_cleaned_for_slot_and_version_cap(tmp_path):
 
     assert cleaned == failed_jobs
     assert [item["id"] for item in store.list_jobs()["items"]] == list(reversed(active_jobs))
+
+
+def test_obsolete_failed_webdl_upgrade_is_cleaned_when_slot_is_active(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    media_key = "movie:themoviedb:504"
+    inventory = inventory_row("old-webdl", media_key, "webdl:sdr:2160p")
+    inventory.update({
+        "quality_type": "webdl", "quality_effect": "sdr",
+        "resolution": "2160p", "bitrate_mbps": 5,
+    })
+    failed_candidate = candidate("failed-webdl", "webdl:sdr:2160p")
+    failed_candidate.update({
+        "quality_type": "webdl", "quality_effect": "sdr",
+        "resolution": "2160p", "bitrate_mbps": 10,
+    })
+    active_candidate = candidate("active-webdl", "webdl:hdr10:2160p")
+    active_candidate.update({
+        "quality_type": "webdl", "quality_effect": "hdr10",
+        "resolution": "2160p", "bitrate_mbps": 12,
+    })
+    store.replace_inventory("Emby", [inventory])
+    store.replace_candidates("pool", [failed_candidate, active_candidate])
+
+    failed_id, reason = store.reserve_download(
+        "failed-webdl", [media_key], 3, None, False
+    )
+    assert failed_id and not reason
+    store.update_job(failed_id, "failed", error="下载种子内容为空")
+    active_id, reason = store.reserve_download(
+        "active-webdl", [media_key], 3, None, False
+    )
+    assert active_id and not reason
+    store.update_job(active_id, "queued", download_id="active-download")
+
+    assert store.cleanup_obsolete_failed_jobs(3, False) == [failed_id]
+    assert [item["id"] for item in store.list_jobs()["items"]] == [active_id]
+
+
+def test_obsolete_failed_webdl_upgrade_is_cleaned_when_bitrate_no_longer_improves(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    media_key = "movie:themoviedb:505"
+    old_inventory = inventory_row("old-webdl", media_key, "webdl:sdr:2160p")
+    old_inventory.update({
+        "quality_type": "webdl", "quality_effect": "sdr",
+        "resolution": "2160p", "bitrate_mbps": 5,
+    })
+    webdl = candidate("failed-webdl", "webdl:sdr:2160p")
+    webdl.update({
+        "quality_type": "webdl", "quality_effect": "sdr",
+        "resolution": "2160p", "bitrate_mbps": 10,
+    })
+    store.replace_inventory("Emby", [old_inventory])
+    store.replace_candidates("pool", [webdl])
+    failed_id, reason = store.reserve_download(
+        "failed-webdl", [media_key], 3, None, False
+    )
+    assert failed_id and not reason
+    store.update_job(failed_id, "failed", error="下载种子内容为空")
+
+    current_inventory = dict(old_inventory)
+    current_inventory.update({"version_key": "better-webdl", "bitrate_mbps": 12})
+    store.replace_inventory("Emby", [current_inventory])
+
+    assert store.cleanup_obsolete_failed_jobs(3, False) == [failed_id]
+    assert store.list_jobs()["total"] == 0
+
+
+def test_legacy_failed_webdl_without_policy_is_cleaned_when_bitrate_no_longer_improves(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    media_key = "movie:themoviedb:506"
+    old_inventory = inventory_row("old-webdl", media_key, "webdl:sdr:2160p")
+    old_inventory.update({
+        "quality_type": "webdl", "quality_effect": "sdr",
+        "resolution": "2160p", "bitrate_mbps": 5,
+    })
+    webdl = candidate("legacy-webdl", "webdl:unknown:2160p")
+    webdl.update({
+        "quality_type": "webdl", "quality_effect": "unknown",
+        "resolution": "2160p", "bitrate_mbps": 10,
+    })
+    store.replace_inventory("Emby", [old_inventory])
+    store.replace_candidates("pool", [webdl])
+    failed_id, reason = store.reserve_download(
+        "legacy-webdl", [media_key], 3, None, False
+    )
+    assert failed_id and not reason
+    store.update_job(failed_id, "failed", error="下载种子内容为空")
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE download_jobs SET webdl_policy_json='{}' WHERE id=?", (failed_id,)
+        )
+
+    current_inventory = dict(old_inventory)
+    current_inventory.update({"version_key": "better-webdl", "bitrate_mbps": 12})
+    store.replace_inventory("Emby", [current_inventory])
+
+    assert store.cleanup_obsolete_failed_jobs(3, False) == [failed_id]
+    assert store.list_jobs()["total"] == 0
 
 
 def test_obsolete_failed_cleanup_uses_bulk_inventory_snapshot(tmp_path, monkeypatch):

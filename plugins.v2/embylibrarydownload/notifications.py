@@ -124,8 +124,10 @@ def build_task_summary(
             ("🎯", "计划数量", requested),
             ("🔍", "检查种子", result.get("attempted", requested)),
             ("✅", "提交成功", submitted),
-            ("❌", "提交失败", failed),
         ]
+        if result.get("cleaned"):
+            rows.append(("🧹", "清理过期", result.get("cleaned")))
+        rows.append(("❌", "提交失败", failed))
     return {
         "config_key": config_key,
         "title": title,
