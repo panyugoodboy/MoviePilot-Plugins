@@ -65,15 +65,15 @@ class NotificationService:
                 f"轮次：{int(payload.get('round') or 0)}",
                 f"CRF：{cls._number(payload.get('crf'), 2)}",
                 f"滤镜：{payload.get('denoise_preset') or '关闭'}",
-                f"码率比例：{cls._number(payload.get('bitrate_percent'), 1)}%",
-                f"目标区间：{cls._number(payload.get('target_min'), 1)}% - {cls._number(payload.get('target_max'), 1)}%",
+                f"视频码率：{cls.bitrate_text(payload)}",
+                f"目标区间：{cls._target_range(payload)}",
                 f"结果：{'命中目标' if payload.get('hit_target') else '继续调整'}",
                 f"测压时长：{cls._duration(payload.get('sample_duration'))}",
             ])
         elif event_type in {"quick_test_completed", "precise_test_completed"}:
             lines.extend([
                 f"最终 CRF：{cls._number(payload.get('crf'), 2)}",
-                f"最终码率比例：{cls._number(payload.get('bitrate_percent'), 1)}%",
+                f"最终视频码率：{cls.bitrate_text(payload)}",
                 f"滤镜：{payload.get('denoise_preset') or '关闭'}",
                 f"总耗时：{cls._duration(payload.get('elapsed_seconds'))}",
             ])
@@ -87,7 +87,7 @@ class NotificationService:
         elif event_type == "encode_completed":
             lines.extend([
                 f"CRF：{cls._number(payload.get('crf'), 2)}",
-                f"码率比例：{cls._number(payload.get('bitrate_percent'), 1)}%",
+                f"视频码率：{cls.bitrate_text(payload)}",
                 f"平均速度：{cls._number(payload.get('avg_fps'), 2)} fps",
                 f"总耗时：{cls._duration(payload.get('elapsed_seconds'))}",
             ])
@@ -112,10 +112,10 @@ class NotificationService:
         if event_type.endswith("_round_completed"):
             summary = (
                 f"第 {int(payload.get('round') or 0)} 轮 · CRF {cls._number(payload.get('crf'), 2)} · "
-                f"{cls._number(payload.get('bitrate_percent'), 1)}% · {payload.get('denoise_preset') or '关闭'}"
+                f"{cls.bitrate_text(payload)} · {payload.get('denoise_preset') or '关闭'}"
             )
         elif event_type in {"quick_test_completed", "precise_test_completed", "encode_completed"}:
-            summary = f"CRF {cls._number(payload.get('crf'), 2)} · {cls._number(payload.get('bitrate_percent'), 1)}% · 已完成"
+            summary = f"CRF {cls._number(payload.get('crf'), 2)} · {cls.bitrate_text(payload)} · 已完成"
         elif event_type.endswith("_failed"):
             summary = str(payload.get("error") or "运行失败")[:160]
         elif event_type == "encode_progress_checkpoint":
@@ -164,6 +164,96 @@ class NotificationService:
             return f"{float(value):.{digits}f}"
         except (TypeError, ValueError):
             return "-"
+
+    @classmethod
+    def bitrate_mbps(cls, payload: dict):
+        data = payload if isinstance(payload, dict) else {}
+        for key in ("bitrate_mbps", "video_bitrate_mbps"):
+            value = cls._positive_number(data.get(key))
+            if value is not None:
+                return value
+        for key in ("sample_bitrate", "video_bitrate", "encoded_video_bitrate"):
+            value = cls._positive_number(data.get(key))
+            if value is not None:
+                return value / 1_000_000.0
+        for key in ("estimated_video_bitrate_kbps", "encoded_video_bitrate_kbps"):
+            value = cls._positive_number(data.get(key))
+            if value is not None:
+                return value / 1000.0
+        source_mbps = cls._source_bitrate_mbps(data)
+        percent = cls._positive_number(data.get("source_bitrate_percent"))
+        if percent is None:
+            percent = cls._positive_number(data.get("bitrate_percent"))
+        if source_mbps is not None and percent is not None:
+            return source_mbps * percent / 100.0
+        return None
+
+    @classmethod
+    def bitrate_text(cls, payload: dict) -> str:
+        value = cls.bitrate_mbps(payload)
+        if value is not None:
+            percent = cls.source_bitrate_percent(payload, value)
+            percent_text = f"源码率的 {percent:.1f}%" if percent is not None else "源码率占比未知"
+            return f"{value:.2f} Mbps（{percent_text}）"
+        percent = cls.source_bitrate_percent(payload)
+        if percent is not None:
+            return f"源码率的 {percent:.1f}%（缺少源码率，无法换算 Mbps）"
+        return "未提供"
+
+    @classmethod
+    def source_bitrate_percent(cls, payload: dict, bitrate_mbps=None):
+        data = payload if isinstance(payload, dict) else {}
+        for key in ("source_bitrate_percent", "bitrate_percent"):
+            value = cls._positive_number(data.get(key))
+            if value is not None:
+                return value
+        source_mbps = cls._source_bitrate_mbps(data)
+        actual = bitrate_mbps if bitrate_mbps is not None else cls.bitrate_mbps(data)
+        if actual is not None and source_mbps is not None and source_mbps > 0:
+            return actual * 100.0 / source_mbps
+        return None
+
+    @classmethod
+    def _target_range(cls, payload: dict) -> str:
+        data = payload or {}
+        target_min = cls._positive_number(data.get("target_min_mbps"))
+        target_max = cls._positive_number(data.get("target_max_mbps"))
+        source_mbps = cls._source_bitrate_mbps(data)
+        if target_min is None or target_max is None:
+            min_percent = cls._positive_number(data.get("target_min"))
+            max_percent = cls._positive_number(data.get("target_max"))
+            if min_percent is None or max_percent is None:
+                return "未提供"
+            if source_mbps is None:
+                return f"源码率的 {min_percent:.1f}% - {max_percent:.1f}%（缺少源码率，无法换算 Mbps）"
+            target_min = source_mbps * min_percent / 100.0
+            target_max = source_mbps * max_percent / 100.0
+        if source_mbps is not None:
+            percent_text = f"源码率的 {target_min * 100.0 / source_mbps:.1f}% - {target_max * 100.0 / source_mbps:.1f}%"
+        else:
+            percent_text = "源码率占比未知"
+        return f"{target_min:.1f} - {target_max:.1f} Mbps（{percent_text}）"
+
+    @classmethod
+    def _source_bitrate_mbps(cls, payload: dict):
+        data = payload if isinstance(payload, dict) else {}
+        for key in ("source_bitrate_mbps", "source_video_bitrate_mbps"):
+            value = cls._positive_number(data.get(key))
+            if value is not None:
+                return value
+        for key in ("source_bitrate", "source_video_bitrate"):
+            value = cls._positive_number(data.get(key))
+            if value is not None:
+                return value / 1_000_000.0
+        return None
+
+    @staticmethod
+    def _positive_number(value):
+        try:
+            number = float(value)
+            return number if number > 0 else None
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _duration(value) -> str:

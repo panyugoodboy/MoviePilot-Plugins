@@ -28,7 +28,7 @@ class UBencodeHelper(_PluginBase):
     plugin_name = "UBencode 助手"
     plugin_desc = "绑定压制中心、领取任务并将 UBits 源种推送到 MoviePilot 下载器。"
     plugin_icon = "ffmpeg.png"
-    plugin_version = "1.3.0"
+    plugin_version = "1.3.1"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy/MoviePilot-Plugins"
     plugin_config_prefix = "ubencodehelper_"
@@ -792,8 +792,9 @@ class UBencodeHelper(_PluginBase):
                     detail.append(f"CRF {item.get('crf')}")
                 if item.get("denoise_preset") and item.get("denoise_preset") != "关闭":
                     detail.append(f"滤镜 {item.get('denoise_preset')}")
-                if item.get("bitrate_percent") is not None:
-                    detail.append(f"码率 {item.get('bitrate_percent')}%")
+                bitrate = NotificationService.bitrate_mbps(item)
+                if bitrate is not None:
+                    detail.append(f"码率 {NotificationService.bitrate_text(item)}")
                 suffix = f" | {'，'.join(detail)}" if detail else ""
                 lines.append(f"{number}. [{status}{progress}] {item.get('title') or '未命名影片'}{suffix}")
                 shown += 1
@@ -1432,7 +1433,7 @@ class UBencodeHelper(_PluginBase):
         for codec, result in results.items():
             item = dict(result or {})
             template = str(item.get("template_text") or "").strip()
-            summary = template or f"CRF {item.get('crf') or '-'}，码率 {item.get('bitrate_percent') or '-'}%"
+            summary = template or f"CRF {item.get('crf') or '-'}，视频码率 {NotificationService.bitrate_text(item)}"
             blocks.append(f"[{codec}]\n{summary[:4000]}")
         return "\n\n".join(blocks)
 

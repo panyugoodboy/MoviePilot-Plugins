@@ -665,11 +665,12 @@
     "name": "UBencode 助手",
     "description": "绑定压制中心、领取任务并将 UBits 源种推送到 MoviePilot 下载器。",
     "labels": "下载管理,任务管理,通知",
-    "version": "1.3.0",
+    "version": "1.3.1",
     "icon": "ffmpeg.png",
     "author": "panyugoodboy",
     "level": 2,
     "history": {
+      "v1.3.1": "同步 UBencode 绝对码率通知，测压与正压结果改为显示 Mbps 和目标区间",
       "v1.3.0": "新增多客户端选择、随机截图、图床上传和两阶段远程发布",
       "v1.2.1": "优化中文互动菜单的 Emoji 和排版",
       "v1.2.0": "新增中文互动命令，可查询客户端状态、当前任务、队列和任务中心",
