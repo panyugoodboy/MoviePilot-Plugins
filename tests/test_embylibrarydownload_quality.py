@@ -253,6 +253,31 @@ def test_recommended_target_matches_scanned_pool_by_original_title():
     assert matching_pool_candidates([candidate], target, {}, [7]) == [candidate]
 
 
+def test_imported_target_matches_scanned_pool_with_two_year_tolerance():
+    target = {
+        "media_type": "movie", "media_source": "import", "title": "Dune Part Two",
+        "year": 2024, "year_tolerance": 2, "sites": [7], "profile": {},
+    }
+    within_range = {
+        "candidate_key": "within", "eligible": True,
+        "title": "Dune.Part.Two.2026.2160p.Remux", "year": 2026, "site_id": 7,
+        "quality_type": "remux", "quality_effect": "dv", "resolution": "2160p",
+        "video_codec": "h265", "bitrate_mbps": 70, "seeders": 20,
+    }
+    outside_range = {
+        **within_range, "candidate_key": "outside", "year": 2027,
+        "title": "Dune.Part.Two.2027.2160p.Remux",
+    }
+    unknown_year = {
+        **within_range, "candidate_key": "unknown", "year": None,
+        "title": "Dune.Part.Two.2160p.Remux",
+    }
+
+    assert matching_pool_candidates(
+        [outside_range, unknown_year, within_range], target, {}, [7]
+    ) == [within_range]
+
+
 def test_recommendation_list_item_is_prioritized_as_parent_target():
     target = {
         "id": 9, "title": "豆瓣电影 Top 250", "enabled": True,

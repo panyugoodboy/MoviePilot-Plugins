@@ -740,6 +740,69 @@ def test_recommendation_list_requires_items(tmp_path):
         })
 
 
+def test_imported_target_normalizes_movies_and_removes_exact_duplicates(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+
+    target = store.save_target({
+        "title": "自定义电影清单",
+        "recommend_source": "import/table",
+        "items": [
+            {"title": " 霸王别姬 ", "year": "1993"},
+            {"title": "霸王别姬", "year": 1993},
+            {"title": "The Matrix", "year": 1999},
+        ],
+    })
+
+    assert target["media_source"] == "import"
+    assert [(item["title"], item["year"]) for item in target["items"]] == [
+        ("霸王别姬", 1993),
+        ("The Matrix", 1999),
+    ]
+    assert [item["position"] for item in target["items"]] == [0, 1]
+    assert all(item["media_type"] == "movie" for item in target["items"])
+    assert all(item["media_source"] == "import" for item in target["items"])
+    assert all(item["year_tolerance"] == 2 for item in target["items"])
+
+
+def test_imported_target_rejects_rows_without_valid_title_and_year(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+
+    with pytest.raises(ValueError, match="第 1 行.*年份"):
+        store.save_target({
+            "title": "无效清单",
+            "recommend_source": "import/table",
+            "items": [{"title": "Movie", "year": "未知"}],
+        })
+
+
+def test_imported_target_inventory_title_match_allows_two_year_difference(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    target = store.save_target({
+        "title": "自定义电影清单",
+        "recommend_source": "import/table",
+        "items": [{"title": "Original Movie", "year": 2026}],
+    })
+    within_range = inventory_row("within-range", "movie:themoviedb:82")
+    within_range.update({
+        "title": "Original Movie", "original_title": "Original Movie", "year": 2024,
+    })
+    outside_range = inventory_row("outside-range", "movie:themoviedb:83")
+    outside_range.update({
+        "title": "Original Movie", "original_title": "Original Movie", "year": 2023,
+    })
+    unknown_year = inventory_row("unknown-year", "movie:themoviedb:84")
+    unknown_year.update({
+        "title": "Original Movie", "original_title": "Original Movie", "year": None,
+    })
+    store.replace_inventory("Emby", [within_range, outside_range, unknown_year])
+    store.mark_inventory_synced()
+
+    result = {item["id"]: item for item in store.list_targets(with_inventory=True)}[target["id"]]
+
+    assert result["items"][0]["inventory_state"] == "present"
+    assert result["items"][0]["inventory_count"] == 1
+
+
 def test_target_inventory_title_fallback_uses_original_title_and_year(tmp_path):
     store = PluginStore(tmp_path / "state.db")
     target = store.save_target({"title": "Original Movie", "year": 2026})

@@ -371,8 +371,12 @@ def _pool_candidate_matches_target(
         return False
     target_year = _as_int(target.get("year"))
     candidate_year = _as_int(candidate.get("year"))
-    if target_year and candidate_year and target_year != candidate_year:
-        return False
+    year_tolerance = max(0, min(2, _as_int(target.get("year_tolerance"))))
+    if target_year:
+        if "year_tolerance" in target and not candidate_year:
+            return False
+        if candidate_year and abs(target_year - candidate_year) > year_tolerance:
+            return False
 
     quality = _candidate_quality(candidate)
     if not quality_matches(

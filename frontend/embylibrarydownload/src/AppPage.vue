@@ -1,5 +1,6 @@
 <script setup>
 import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { read, utils } from 'xlsx'
 
 const props = defineProps({
   api: { type: Object, default: () => ({}) },
@@ -43,6 +44,9 @@ const recommendationImporting = ref(false)
 const notificationTesting = ref(false)
 const recommendationSources = ref([])
 const recommendation = reactive({ items: [], source: 'recommend/tmdb_movies', page: 1, canNext: false })
+const targetImportDialog = ref(false)
+const targetImportLoading = ref(false)
+const targetImport = reactive(emptyTargetImport())
 let pollTimer = null
 
 const builtInRecommendationSources = [
@@ -317,6 +321,12 @@ function emptyTarget() {
   }
 }
 
+function emptyTargetImport() {
+  return {
+    name: '', file: null, file_name: '', total: 0, items: [], errors: [], duplicates: 0, truncated: 0,
+  }
+}
+
 function openTarget(target = null) {
   editingTargetId.value = target?.id || null
   Object.assign(targetForm, emptyTarget(), target || {}, {
@@ -325,9 +335,126 @@ function openTarget(target = null) {
   targetDialog.value = true
 }
 
+function openTargetImport(asNew = true) {
+  if (asNew) editingTargetId.value = null
+  Object.assign(targetImport, emptyTargetImport())
+  targetImportDialog.value = true
+}
+
+function targetSourceLabel(source) {
+  if (source === 'import/table') return '导入表格（电影名 + 年份）'
+  return recommendationSources.value.find(item => item.value === source)?.title
+    || builtInRecommendationSources.find(item => item.value === source)?.title
+    || source
+    || '尚未选择'
+}
+
+function normalizeImportHeader(value) {
+  return String(value ?? '').replace(/^\uFEFF/, '').trim().toLowerCase().replace(/[\s_\-（）()]+/g, '')
+}
+
+function normalizeImportTitle(value) {
+  return String(value ?? '').replace(/^\uFEFF/, '').trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+}
+
+function importFileValue(value) {
+  if (Array.isArray(value)) return value[0] || null
+  return value || null
+}
+
+async function parseTargetImportFile(value) {
+  const file = importFileValue(value)
+  Object.assign(targetImport, emptyTargetImport(), { file })
+  if (!file) return
+  targetImportLoading.value = true
+  actionError.value = ''
+  try {
+    if (file.size > 5 * 1024 * 1024) throw new Error('表格不能超过 5 MB')
+    const workbook = read(await file.arrayBuffer(), { type: 'array', codepage: 65001 })
+    const sheet = workbook.Sheets[workbook.SheetNames[0]]
+    if (!sheet) throw new Error('表格中没有可读取的工作表')
+    const rows = utils.sheet_to_json(sheet, { header: 1, defval: '', blankrows: false, raw: true })
+    if (!rows.length) throw new Error('表格没有数据')
+
+    const titleHeaders = new Set(['电影名', '电影名称', '片名', '名称', 'title', 'name', 'movietitle'])
+    const yearHeaders = new Set(['年份', '上映年份', '年代', 'year', 'releaseyear'])
+    const firstRow = Array.isArray(rows[0]) ? rows[0].map(normalizeImportHeader) : []
+    const titleIndex = firstRow.findIndex(value => titleHeaders.has(value))
+    const yearIndex = firstRow.findIndex(value => yearHeaders.has(value))
+    const hasHeader = titleIndex >= 0 && yearIndex >= 0
+    const movieColumn = hasHeader ? titleIndex : 0
+    const yearColumn = hasHeader ? yearIndex : 1
+    const startIndex = hasHeader ? 1 : 0
+    const items = []
+    const errors = []
+    const seen = new Set()
+    let duplicates = 0
+    let truncated = 0
+
+    for (let index = startIndex; index < rows.length; index += 1) {
+      const row = Array.isArray(rows[index]) ? rows[index] : []
+      const title = String(row[movieColumn] ?? '').trim()
+      const yearText = String(row[yearColumn] ?? '').trim()
+      if (!title && !yearText) continue
+      const year = /^\d{4}$/.test(yearText) ? Number(yearText) : 0
+      if (!title || year < 1888 || year > 2100) {
+        errors.push(`第 ${index + 1} 行：${!title ? '电影名不能为空' : '年份必须是 1888–2100 的四位数字'}`)
+        continue
+      }
+      const key = `${normalizeImportTitle(title)}:${year}`
+      if (seen.has(key)) {
+        duplicates += 1
+        continue
+      }
+      seen.add(key)
+      if (items.length >= 1000) {
+        truncated += 1
+        continue
+      }
+      items.push({
+        media_type: 'movie', media_source: 'import', media_id: '', title, original_title: '', year,
+        year_tolerance: 2, poster_url: '', position: items.length, row_number: index + 1,
+      })
+    }
+    if (!items.length) throw new Error(errors[0] || '表格中没有可导入的电影')
+    Object.assign(targetImport, {
+      file, file_name: file.name, total: rows.length - startIndex, items, errors, duplicates, truncated,
+      name: targetImport.name || file.name.replace(/\.(xlsx?|csv)$/i, ''),
+    })
+  } catch (error) {
+    const message = error?.message || '读取表格失败'
+    actionError.value = message
+    toast?.error?.(message)
+  } finally {
+    targetImportLoading.value = false
+  }
+}
+
+function useTargetImport() {
+  if (!targetImport.name.trim() || !targetImport.items.length) return
+  Object.assign(targetForm, emptyTarget(), {
+    title: targetImport.name.trim(),
+    media_source: 'import',
+    recommend_source: 'import/table',
+    items: targetImport.items.map(({ row_number, ...item }) => item),
+  })
+  targetImportDialog.value = false
+  targetDialog.value = true
+}
+
+function downloadTargetImportTemplate() {
+  const content = '\uFEFF电影名,年份\r\n霸王别姬,1993\r\nThe Matrix,1999\r\n'
+  const url = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8' }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = '电影目标导入模板.csv'
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
 async function saveTarget() {
   if (!editingTargetId.value && (!targetForm.recommend_source || !targetForm.items.length)) {
-    const message = '请先从自定义推荐中选择一个完整榜单作为目标清单'
+    const message = '请先选择推荐榜单或导入电影表格作为目标清单'
     actionError.value = message
     toast?.error?.(message)
     return
@@ -741,10 +868,10 @@ onBeforeUnmount(() => {
       <VWindowItem value="targets">
         <section aria-labelledby="targets-title">
           <div class="section-heading">
-            <div><h2 id="targets-title">目标清单</h2><p>一个目标对应一个完整推荐榜单；榜单内每部影片都是待补库项目。</p></div>
-            <div class="button-row"><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-magnify" @click="searchTarget()">搜索全部</VBtn><VBtn class="action-btn" color="primary" prepend-icon="mdi-plus" @click="openTarget()">新增目标</VBtn></div>
+            <div><h2 id="targets-title">目标清单</h2><p>一个目标对应一个完整推荐榜单或导入清单；清单内每部影片都是待补库项目。</p></div>
+            <div class="button-row"><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-magnify" @click="searchTarget()">搜索全部</VBtn><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-file-import-outline" @click="openTargetImport()">导入目标</VBtn><VBtn class="action-btn" color="primary" prepend-icon="mdi-plus" @click="openTarget()">新增目标</VBtn></div>
           </div>
-          <VAlert v-if="!targets.length" type="info" variant="tonal">暂无目标清单。可新增“豆瓣电影 Top 250”等推荐榜单，自动补齐其中全部影片。</VAlert>
+          <VAlert v-if="!targets.length" type="info" variant="tonal">暂无目标清单。可选择“豆瓣电影 Top 250”等推荐榜单，或导入电影名与年份表格。</VAlert>
           <VAlert v-if="targetPoolTask && ['running','success','failed'].includes(targetPoolTask.status)" :type="targetPoolTask.status === 'failed' ? 'error' : targetPoolTask.status === 'success' ? 'success' : 'info'" variant="tonal" class="mb-4">
             <div class="d-flex align-center ga-3">
               <VProgressCircular v-if="targetPoolTask.status === 'running'" indeterminate size="22" width="2" />
@@ -756,7 +883,7 @@ onBeforeUnmount(() => {
             <VCard v-for="target in targets" :key="target.id" variant="outlined" class="target-card">
               <VCardText>
                 <div class="target-list-header">
-                  <div><span class="eyebrow">RECOMMENDATION LIST</span><h3>{{ target.title }}</h3><p>{{ target.item_count || target.items?.length || 1 }} 部影片 · 已入库 {{ target.in_library_count || 0 }} · 待补 {{ target.missing_count ?? target.item_count ?? 0 }}</p></div>
+                  <div><span class="eyebrow">{{ target.recommend_source === 'import/table' ? 'CUSTOM IMPORT' : 'RECOMMENDATION LIST' }}</span><h3>{{ target.title }}</h3><p>{{ target.item_count || target.items?.length || 1 }} 部影片 · 已入库 {{ target.in_library_count || 0 }} · 待补 {{ target.missing_count ?? target.item_count ?? 0 }}</p></div>
                   <div class="target-status"><VChip :color="target.inventory_state === 'present' ? 'success' : target.inventory_state === 'partial' ? 'info' : target.inventory_state === 'missing' ? 'warning' : 'default'" :prepend-icon="target.inventory_state === 'present' ? 'mdi-check-all' : 'mdi-progress-clock'">{{ target.inventory_state === 'present' ? '全部入库' : target.inventory_state === 'partial' ? '补库中' : target.inventory_state === 'missing' ? '等待入库' : '库存未同步' }}</VChip><VChip :color="target.enabled ? 'primary' : 'default'" variant="tonal">{{ target.enabled ? '启用' : '停用' }}</VChip></div>
                 </div>
                 <div class="button-row mt-4"><VBtn color="primary" variant="tonal" prepend-icon="mdi-database-search" @click="quickSearchTarget(target)">匹配已扫描种子</VBtn><VBtn variant="text" @click="showTargetCandidates(target)">查看候选</VBtn><VBtn variant="text" @click="openTarget(target)">编辑规则</VBtn><VBtn variant="text" color="error" @click="deleteTarget(target)">删除清单</VBtn></div>
@@ -969,6 +1096,41 @@ onBeforeUnmount(() => {
       <VCard><VCardTitle>确认批量下载</VCardTitle><VCardText>将处理当前选择的 {{ selectedCandidates.length }} 个候选。普通版本仍执行同质量去重和最多三版本校验；4K、1080P WEB-DL固定槽位按最高码率补位或升级。</VCardText><VCardActions><VSpacer /><VBtn class="action-btn" variant="text" @click="confirmDownload=false">取消</VBtn><VBtn class="action-btn" color="primary" @click="submitDownloads">确认下载</VBtn></VCardActions></VCard>
     </VDialog>
 
+    <VDialog v-model="targetImportDialog" max-width="980" scrollable>
+      <VCard>
+        <VCardTitle class="dialog-title"><div><span>导入自定义目标</span><small>支持 XLSX、XLS、CSV；前两列或表头列填写电影名和年份</small></div><VBtn icon="mdi-close" variant="text" aria-label="关闭目标导入" @click="targetImportDialog=false" /></VCardTitle>
+        <VCardText>
+          <div class="settings-grid">
+            <VTextField v-model="targetImport.name" label="目标清单名称" hint="默认使用文件名，可修改" persistent-hint />
+            <VFileInput v-model="targetImport.file" label="选择表格" accept=".xlsx,.xls,.csv,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" prepend-icon="mdi-file-excel-outline" show-size :loading="targetImportLoading" @update:model-value="parseTargetImportFile" />
+          </div>
+          <div class="button-row import-template-row"><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-download-outline" @click="downloadTargetImportTemplate">下载 CSV 模板</VBtn><span>支持表头：电影名/片名/Title 与 年份/Year；无表头时读取前两列。</span></div>
+          <VAlert type="info" variant="tonal" class="mt-3">年份按目标值前后 2 年匹配。例如导入 1993，会匹配 1991–1995 年的 Emby 库存和已扫描种子。</VAlert>
+          <template v-if="targetImport.file_name && !targetImportLoading">
+            <div class="import-summary" aria-label="导入预检汇总">
+              <VChip color="success" prepend-icon="mdi-check-circle-outline">有效 {{ targetImport.items.length }}</VChip>
+              <VChip v-if="targetImport.duplicates" color="info" prepend-icon="mdi-content-duplicate">重复 {{ targetImport.duplicates }}</VChip>
+              <VChip v-if="targetImport.errors.length" color="warning" prepend-icon="mdi-alert-outline">无效 {{ targetImport.errors.length }}</VChip>
+              <VChip v-if="targetImport.truncated" color="warning" prepend-icon="mdi-format-list-numbered">超限 {{ targetImport.truncated }}</VChip>
+            </div>
+            <VAlert v-if="targetImport.errors.length" type="warning" variant="tonal" class="mt-3">
+              <strong>以下行不会导入：</strong>
+              <ul class="import-error-list"><li v-for="message in targetImport.errors.slice(0, 10)" :key="message">{{ message }}</li></ul>
+              <small v-if="targetImport.errors.length > 10">另有 {{ targetImport.errors.length - 10 }} 条未展开</small>
+            </VAlert>
+            <div v-if="targetImport.items.length" class="import-preview mt-3">
+              <div class="import-preview-heading"><strong>导入预览</strong><span>显示前 {{ Math.min(100, targetImport.items.length) }} 条，共 {{ targetImport.items.length }} 条有效记录</span></div>
+              <VTable density="compact" fixed-header height="320">
+                <thead><tr><th>表格行</th><th>电影名</th><th>年份</th><th>匹配范围</th></tr></thead>
+                <tbody><tr v-for="item in targetImport.items.slice(0, 100)" :key="`${item.row_number}:${item.title}:${item.year}`"><td>{{ item.row_number }}</td><td>{{ item.title }}</td><td>{{ item.year }}</td><td>{{ item.year - 2 }}–{{ item.year + 2 }}</td></tr></tbody>
+              </VTable>
+            </div>
+          </template>
+        </VCardText>
+        <VCardActions><VSpacer /><VBtn class="action-btn" variant="text" @click="targetImportDialog=false">取消</VBtn><VBtn class="action-btn" color="primary" prepend-icon="mdi-tune-variant" :disabled="targetImportLoading || !targetImport.name.trim() || !targetImport.items.length" @click="useTargetImport">导入并设置规则</VBtn></VCardActions>
+      </VCard>
+    </VDialog>
+
     <VDialog v-model="recommendationDialog" max-width="1180" scrollable>
       <VCard>
         <VCardTitle class="dialog-title"><div><span>选择目标榜单</span><small>整个推荐来源会作为一个目标清单，不是只添加单部影片</small></div><VBtn icon="mdi-close" variant="text" aria-label="关闭推荐选择" @click="recommendationDialog=false" /></VCardTitle>
@@ -995,9 +1157,9 @@ onBeforeUnmount(() => {
 
     <VDialog v-model="targetDialog" max-width="820" scrollable>
       <VCard><VCardTitle>{{ editingTargetId ? '编辑目标' : '新增目标' }}</VCardTitle><VCardText><VForm id="target-form" @submit.prevent="saveTarget"><div class="settings-grid">
-        <div class="recommend-entry"><VBtn class="action-btn" color="primary" variant="tonal" prepend-icon="mdi-playlist-plus" @click="openRecommendationPicker">选择推荐榜单</VBtn><span>{{ targetForm.items.length ? `已选择“${targetForm.title}”，共 ${targetForm.items.length} 部影片` : '例如选择“豆瓣电影 Top 250”，会把榜单内全部影片加入此目标清单。' }}</span></div>
+        <div class="recommend-entry"><div class="recommend-entry-actions"><VBtn class="action-btn" color="primary" variant="tonal" prepend-icon="mdi-playlist-plus" @click="openRecommendationPicker">选择推荐榜单</VBtn><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-file-import-outline" @click="openTargetImport(false)">导入电影表格</VBtn></div><span>{{ targetForm.items.length ? `已选择“${targetForm.title}”，共 ${targetForm.items.length} 部影片` : '选择完整推荐榜单，或导入“电影名 + 年份”表格。' }}</span></div>
         <VTextField v-model="targetForm.title" label="目标清单名称" required />
-        <VTextField :model-value="targetForm.recommend_source || '尚未选择'" label="推荐来源" readonly />
+        <VTextField :model-value="targetSourceLabel(targetForm.recommend_source)" label="目标来源" readonly />
         <VTextField :model-value="targetForm.items.length" label="榜单影片数量" readonly />
         <VSelect v-model="targetForm.desired_versions" label="榜单内每部影片目标版本数" :items="[1,2,3]" />
         <VSelect v-model="targetForm.sites" label="目标站点（留空使用全局）" :items="siteItems" item-title="name" item-value="id" multiple chips />
@@ -1179,6 +1341,15 @@ p { margin: 0; color: var(--text-muted); line-height: 1.5; }
 .recommend-card small { color: var(--text-muted); font-size: .76rem; }
 .recommend-entry { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
 .recommend-entry span { color: var(--text-muted); font-size: .82rem; }
+.recommend-entry-actions,
+.import-summary { display: flex; flex-wrap: wrap; gap: 8px; }
+.import-template-row { align-items: center; margin-top: 8px; }
+.import-template-row span,
+.import-preview-heading span { color: var(--text-muted); font-size: .8rem; }
+.import-summary { margin-top: 14px; }
+.import-error-list { max-height: 150px; padding-left: 20px; margin: 8px 0 2px; overflow-y: auto; }
+.import-preview { overflow: hidden; border: 1px solid var(--line); border-radius: 10px; }
+.import-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; background: var(--surface-soft); }
 
 .settings-hero { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 16px; margin-bottom: 12px; border: 1px solid var(--line-strong); border-radius: 12px; background: linear-gradient(120deg, rgba(var(--v-theme-primary), .09), rgb(var(--v-theme-surface)) 56%); }
 .settings-hero-copy { gap: 12px; min-width: 0; }
@@ -1264,6 +1435,9 @@ button:focus-visible { outline: 3px solid rgba(var(--v-theme-primary), .72); out
   .recommend-pager { justify-content: space-between; }
   .recommend-pager :deep(.v-btn) { min-width: 44px; }
   .recommend-entry { align-items: stretch; flex-direction: column; }
+  .recommend-entry-actions { flex-direction: column; }
+  .recommend-entry-actions :deep(.v-btn) { width: 100%; }
+  .import-preview-heading { align-items: flex-start; flex-direction: column; }
   .selection-bar { padding: 8px 10px; }
   .desktop-table { display: none; }
   .mobile-list { display: grid; gap: 8px; }

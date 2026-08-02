@@ -14,9 +14,9 @@ def test_manifest_matches_plugin_version_and_name():
     entry = manifest["EmbyLibraryDownload"]
 
     assert entry["name"] == "联动EMBY库筛选下载"
-    assert entry["version"] == "0.3.16"
+    assert entry["version"] == "0.3.17"
     assert entry["release"] is True
-    assert 'plugin_version = "0.3.16"' in source
+    assert 'plugin_version = "0.3.17"' in source
     assert '"auto_download_cron": ""' in source
     assert '"proxy_enabled": True' in source
     assert 'plugin_icon = "emby.png"' in source
@@ -31,6 +31,11 @@ def test_manifest_matches_plugin_version_and_name():
     assert 'target-pool:' in source
     assert '选择目标榜单' in page
     assert '将整个榜单设为目标' in page
+    assert '导入自定义目标' in page
+    assert "import { read, utils } from 'xlsx'" in page
+    assert "recommend_source: 'import/table'" in page
+    assert 'year_tolerance: 2' in page
+    assert '下载 CSV 模板' in page
     assert 'target.items || [target]' in page
     assert 'mdi-check-circle' in page
     assert 'auto_download: true, prefer_scanned_pool: true' in page

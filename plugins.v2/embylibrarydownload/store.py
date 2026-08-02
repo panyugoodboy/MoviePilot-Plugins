@@ -393,8 +393,13 @@ class PluginStore:
         clauses, params = ["item_type=?"], [media_type]
         year = _int(target.get("year"))
         if year:
-            clauses.append("(year BETWEEN ? AND ? OR year IS NULL)")
-            params.extend([year - 1, year + 1])
+            tolerance = max(0, min(2, _int(target.get("year_tolerance"), 1)))
+            clauses.append(
+                "year BETWEEN ? AND ?"
+                if "year_tolerance" in target
+                else "(year BETWEEN ? AND ? OR year IS NULL)"
+            )
+            params.extend([year - tolerance, year + tolerance])
         rows = conn.execute(
             "SELECT version_key, title, original_title FROM inventory_versions WHERE "
             + " AND ".join(clauses),
@@ -416,19 +421,28 @@ class PluginStore:
 
     def save_target(self, payload: Mapping[str, Any], target_id: Optional[int] = None) -> dict:
         now = utcnow()
-        items = [dict(item) for item in payload.get("items") or [] if isinstance(item, Mapping)]
         recommend_source = _none(payload.get("recommend_source"))
+        raw_items = payload.get("items") or []
+        items = (
+            _normalize_imported_target_items(raw_items)
+            if recommend_source == "import/table"
+            else [dict(item) for item in raw_items if isinstance(item, Mapping)]
+        )
         if recommend_source and not items:
             raise ValueError("推荐目标清单至少需要一部影片")
         if len(items) > 1000:
             raise ValueError("单个目标清单最多包含 1000 部影片")
-        media_type = str(payload.get("media_type") or "movie").lower()
+        media_type = "movie" if recommend_source == "import/table" else str(
+            payload.get("media_type") or "movie"
+        ).lower()
         if media_type not in {"movie", "tv"}:
             raise ValueError("媒体类型必须为 movie 或 tv")
         desired = max(1, min(3, _int(payload.get("desired_versions"), 3)))
         values = {
             "media_type": media_type,
-            "media_source": str(payload.get("media_source") or "themoviedb"),
+            "media_source": "import" if recommend_source == "import/table" else str(
+                payload.get("media_source") or "themoviedb"
+            ),
             "media_id": _none(payload.get("media_id") or payload.get("tmdb_id")),
             "title": str(payload.get("title") or "").strip(),
             "original_title": _none(payload.get("original_title")),
@@ -1215,6 +1229,38 @@ def _none(value: Any) -> Optional[str]:
 
 def _normalize_title(value: Any) -> str:
     return " ".join(re.findall(r"[^\W_]+", str(value or "").casefold(), re.UNICODE))
+
+
+def _normalize_imported_target_items(items: Any) -> list[dict]:
+    normalized = []
+    seen = set()
+    for row_number, item in enumerate(items if isinstance(items, list) else [], start=1):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"第 {row_number} 行格式无效")
+        title = str(item.get("title") or "").strip()
+        year = _int(item.get("year"))
+        if not title:
+            raise ValueError(f"第 {row_number} 行电影名不能为空")
+        if not 1888 <= year <= 2100:
+            raise ValueError(f"第 {row_number} 行年份必须是 1888–2100 的四位数字")
+        key = (_normalize_title(title), year)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append({
+            "media_type": "movie",
+            "media_source": "import",
+            "media_id": "",
+            "title": title,
+            "original_title": "",
+            "year": year,
+            "year_tolerance": 2,
+            "poster_url": "",
+            "position": len(normalized),
+        })
+        if len(normalized) > 1000:
+            raise ValueError("单个目标清单最多包含 1000 部影片")
+    return normalized
 
 
 def _keys_overlap(left: str, right: str) -> bool:
