@@ -21,7 +21,7 @@ def select_movie_metadata(
     tolerance = max(0, min(2, _int(item.get("year_tolerance"), 2)))
     target_key = _normalize_title(target_title)
     ranked = []
-    localized_fallback = None
+    localized_fallbacks = []
     for index, media in enumerate(candidates or []):
         if not _is_movie(media):
             continue
@@ -32,8 +32,8 @@ def select_movie_metadata(
         keys = {_normalize_title(value) for value in titles if value}
         exact = bool(target_key and target_key in keys)
         if not exact:
-            if index == 0 and chinese_title(media) and poster_url(media):
-                localized_fallback = media
+            if chinese_title(media) and poster_url(media):
+                localized_fallbacks.append((abs(year - target_year), index, media))
             continue
         score = 100
         score += 30 - abs(year - target_year) * 10
@@ -42,16 +42,21 @@ def select_movie_metadata(
         ranked.append((score, -index, media))
     if ranked:
         return max(ranked, key=lambda row: row[:2])[2]
-    return localized_fallback
+    if localized_fallbacks:
+        return min(localized_fallbacks, key=lambda row: row[:2])[2]
+    return None
 
 
 def chinese_title(media: Any) -> str:
-    """Return a Chinese localized title without mistaking Japanese/Korean aliases."""
+    """Return a Chinese localized title, including official numeric titles."""
 
     values = [_value(media, "title"), *(_value(media, "names", []) or [])]
     for value in values:
         text = str(value or "").strip()
         if HAN_RE.search(text) and not KANA_HANGUL_RE.search(text):
+            return text
+        if text and not re.search(r"[A-Za-z]", text) \
+                and not KANA_HANGUL_RE.search(text) and re.search(r"\d", text):
             return text
     return ""
 

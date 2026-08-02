@@ -14,11 +14,12 @@ def test_manifest_matches_plugin_version_and_name():
     entry = manifest["EmbyLibraryDownload"]
 
     assert entry["name"] == "联动EMBY库筛选下载"
-    assert entry["version"] == "0.3.23"
+    assert entry["version"] == "0.3.24"
     assert entry["release"] is True
-    assert 'plugin_version = "0.3.23"' in source
+    assert 'plugin_version = "0.3.24"' in source
     assert 'def _search_tmdb_movies(' in service
     assert 'primary_release_year' in service
+    assert 'self._search_tmdb_movies(source_title, "")' in service
     assert 'chain.match_doubaninfo(' in service
     assert '"auto_download_cron": ""' in source
     assert '"proxy_enabled": True' in source

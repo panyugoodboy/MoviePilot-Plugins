@@ -84,6 +84,32 @@ def test_select_movie_metadata_accepts_top_localized_alias_with_poster():
     assert selected["title"] == "寄生虫"
 
 
+def test_select_movie_metadata_accepts_later_localized_alias_in_year_range():
+    item = {"title": "The Hunt", "year": 2011, "year_tolerance": 2}
+
+    selected = metadata.select_movie_metadata(
+        item,
+        [
+            {
+                "type": "movie",
+                "title": "狩猎",
+                "original_title": "The Hunt",
+                "year": 2020,
+                "poster_path": "https://image.tmdb.org/wrong.jpg",
+            },
+            {
+                "type": "movie",
+                "title": "狩猎",
+                "original_title": "Jagten",
+                "year": 2012,
+                "poster_path": "https://image.tmdb.org/correct.jpg",
+            },
+        ],
+    )
+
+    assert selected["original_title"] == "Jagten"
+
+
 def test_scraped_item_uses_chinese_alias_and_preserves_original_title():
     item = {"title": "Citizen Kane", "year": 1941, "position": 0}
     media = {
@@ -125,3 +151,22 @@ def test_scraped_item_uses_douban_id_for_fallback_metadata():
     assert result["media_source"] == "douban"
     assert result["media_id"] == "1295644"
     assert result["title"] == "寄生虫"
+
+
+def test_numeric_localized_title_is_complete():
+    result = metadata.scraped_item(
+        {"title": "2046", "year": 2004},
+        {
+            "type": "movie",
+            "source": "themoviedb",
+            "media_id": "844",
+            "title": "2046",
+            "original_title": "2046",
+            "year": 2004,
+            "poster_path": "https://image.tmdb.org/2046.jpg",
+        },
+        "2026-08-03T00:00:00+08:00",
+    )
+
+    assert result["metadata_state"] == "complete"
+    assert metadata.has_complete_metadata(result) is True

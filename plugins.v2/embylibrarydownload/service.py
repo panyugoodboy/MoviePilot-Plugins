@@ -163,6 +163,10 @@ class LibraryDownloadService:
                         item, self._search_tmdb_movies(source_title, year)
                     )
                     if not media:
+                        media = select_movie_metadata(
+                            item, self._search_tmdb_movies(source_title, "")
+                        )
+                    if not media:
                         douban = chain.match_doubaninfo(
                             name=source_title,
                             year=year or None,
