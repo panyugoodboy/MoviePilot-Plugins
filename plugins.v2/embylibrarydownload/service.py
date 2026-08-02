@@ -113,20 +113,27 @@ class LibraryDownloadService:
             if has_complete_metadata(item):
                 skipped += 1
             else:
-                source_title = str(
-                    item.get("original_title") or item.get("title") or ""
-                ).strip()
+                source_title = str(item.get("title") or item.get("original_title") or "").strip()
                 try:
                     year = str(item.get("year") or "").strip()
-                    query = f"{source_title} ({year})" if year else source_title
-                    meta = MetaInfo(title=query)
-                    meta.type = MediaType.MOVIE
-                    meta.year = year or None
-                    kwargs = {"metainfo": meta}
-                    if "source" in inspect.signature(chain.recognize_by_meta).parameters:
+                    meta = MetaInfo(title=source_title)
+                    kwargs = {"meta": meta}
+                    if "source" in inspect.signature(chain.search_medias).parameters:
                         kwargs["source"] = "themoviedb"
-                    recognized = chain.recognize_by_meta(**kwargs)
-                    media = select_movie_metadata(item, [recognized] if recognized else [])
+                    media = select_movie_metadata(item, chain.search_medias(**kwargs) or [])
+                    if not media:
+                        douban = chain.match_doubaninfo(
+                            name=source_title,
+                            year=year or None,
+                            mtype=MediaType.MOVIE,
+                        )
+                        if douban:
+                            media = dict(douban)
+                            media.setdefault("source", "douban")
+                            media.setdefault("type", "movie")
+                            media.setdefault(
+                                "media_id", media.get("douban_id") or media.get("id")
+                            )
                     if not media:
                         item.update({
                             "metadata_state": "not_found",

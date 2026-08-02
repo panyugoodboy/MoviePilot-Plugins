@@ -30,12 +30,9 @@ def select_movie_metadata(
         titles = _media_titles(media)
         keys = {_normalize_title(value) for value in titles if value}
         exact = bool(target_key and target_key in keys)
-        partial = bool(target_key and any(
-            target_key in value or value in target_key for value in keys if value
-        ))
-        if not exact and not partial:
+        if not exact:
             continue
-        score = 100 if exact else 40 if partial else 0
+        score = 100
         score += 30 - abs(year - target_year) * 10
         score += 10 if chinese_title(media) else 0
         score += 5 if poster_url(media) else 0
@@ -69,7 +66,13 @@ def scraped_item(item: Mapping[str, Any], media: Any, scraped_at: str) -> dict:
     source_title = str(item.get("original_title") or item.get("title") or "").strip()
     localized = chinese_title(media)
     source = str(_value(media, "source") or "themoviedb").strip().lower()
-    media_id = str(_value(media, "media_id") or _value(media, "tmdb_id") or "").strip()
+    media_id = str(
+        _value(media, "media_id")
+        or _value(media, "tmdb_id")
+        or _value(media, "douban_id")
+        or _value(media, "id")
+        or ""
+    ).strip()
     result.update({
         "media_type": "movie",
         "media_source": source,

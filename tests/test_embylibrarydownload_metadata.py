@@ -29,6 +29,22 @@ def test_select_movie_metadata_requires_matching_title_and_two_year_range():
     assert selected["year"] == 1941
 
 
+def test_select_movie_metadata_rejects_same_year_partial_title():
+    item = {"title": "The Shining", "year": 1980, "year_tolerance": 2}
+
+    selected = metadata.select_movie_metadata(
+        item,
+        [{
+            "type": "电影",
+            "title": "Making 'The Shining'",
+            "original_title": "Making 'The Shining'",
+            "year": 1980,
+        }],
+    )
+
+    assert selected is None
+
+
 def test_scraped_item_uses_chinese_alias_and_preserves_original_title():
     item = {"title": "Citizen Kane", "year": 1941, "position": 0}
     media = {
@@ -50,3 +66,23 @@ def test_scraped_item_uses_chinese_alias_and_preserves_original_title():
     assert result["media_id"] == "15"
     assert result["metadata_state"] == "complete"
     assert metadata.has_complete_metadata(result) is True
+
+
+def test_scraped_item_uses_douban_id_for_fallback_metadata():
+    result = metadata.scraped_item(
+        {"title": "Parasite", "year": 2019},
+        {
+            "type": "movie",
+            "source": "douban",
+            "douban_id": "1295644",
+            "title": "寄生虫",
+            "original_title": "기생충",
+            "year": 2019,
+            "poster_url": "https://img.example/poster.jpg",
+        },
+        "2026-08-03T00:00:00+08:00",
+    )
+
+    assert result["media_source"] == "douban"
+    assert result["media_id"] == "1295644"
+    assert result["title"] == "寄生虫"
