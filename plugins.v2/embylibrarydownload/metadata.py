@@ -21,6 +21,7 @@ def select_movie_metadata(
     tolerance = max(0, min(2, _int(item.get("year_tolerance"), 2)))
     target_key = _normalize_title(target_title)
     ranked = []
+    localized_fallback = None
     for index, media in enumerate(candidates or []):
         if not _is_movie(media):
             continue
@@ -31,13 +32,17 @@ def select_movie_metadata(
         keys = {_normalize_title(value) for value in titles if value}
         exact = bool(target_key and target_key in keys)
         if not exact:
+            if index == 0 and chinese_title(media) and poster_url(media):
+                localized_fallback = media
             continue
         score = 100
         score += 30 - abs(year - target_year) * 10
         score += 10 if chinese_title(media) else 0
         score += 5 if poster_url(media) else 0
         ranked.append((score, -index, media))
-    return max(ranked, default=(None, None, None), key=lambda row: row[:2])[2]
+    if ranked:
+        return max(ranked, key=lambda row: row[:2])[2]
+    return localized_fallback
 
 
 def chinese_title(media: Any) -> str:

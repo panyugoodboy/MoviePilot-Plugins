@@ -12,6 +12,7 @@ from app.chain.download import DownloadChain
 from app.chain.media import MediaChain
 from app.chain.search import SearchChain
 from app.chain.storage import StorageChain
+from app.core.config import settings
 from app.core.context import Context, MediaInfo, TorrentInfo
 from app.core.metainfo import MetaInfo
 from app.db.site_oper import SiteOper
@@ -21,6 +22,7 @@ from app.helper.sites import SitesHelper
 from app.log import logger
 from app.schemas import FileItem
 from app.schemas.types import MediaType
+from app.utils.http import RequestUtils
 
 from .quality import (
     apply_source_quality_type,
@@ -96,6 +98,47 @@ class LibraryDownloadService:
             servers.append({"name": name, "libraries": libraries})
         return {"sites": sites, "emby_servers": servers}
 
+    def _search_tmdb_movies(self, title: str, year: str) -> list[dict]:
+        api_key = str(getattr(settings, "TMDB_API_KEY", "") or "").strip()
+        if not api_key:
+            return []
+        domain = str(
+            getattr(settings, "TMDB_API_DOMAIN", "") or "api.themoviedb.org"
+        ).strip()
+        params = {
+            "api_key": api_key,
+            "query": title,
+            "language": str(getattr(settings, "TMDB_LOCALE", "") or "zh-CN"),
+            "page": 1,
+            "include_adult": "false",
+        }
+        if year:
+            params["primary_release_year"] = year
+        response = RequestUtils(
+            proxies=settings.PROXY if self.config().get("proxy_enabled") else None,
+            ua=settings.NORMAL_USER_AGENT,
+        ).get_res(url=f"https://{domain}/3/search/movie?{urlencode(params)}")
+        if not response or response.status_code != 200:
+            return []
+        results = []
+        for media in (response.json() or {}).get("results") or []:
+            release_date = str(media.get("release_date") or "")
+            poster_path = str(media.get("poster_path") or "")
+            results.append({
+                "type": "movie",
+                "source": "themoviedb",
+                "media_id": str(media.get("id") or ""),
+                "tmdb_id": media.get("id"),
+                "title": media.get("title"),
+                "original_title": media.get("original_title"),
+                "year": release_date[:4],
+                "poster_path": (
+                    f"https://image.tmdb.org/t/p/original{poster_path}"
+                    if poster_path else ""
+                ),
+            })
+        return results
+
     def scrape_target_metadata(
         self, target_id: int, progress: Optional[Callable[[dict], None]] = None
     ) -> dict:
@@ -116,11 +159,9 @@ class LibraryDownloadService:
                 source_title = str(item.get("title") or item.get("original_title") or "").strip()
                 try:
                     year = str(item.get("year") or "").strip()
-                    meta = MetaInfo(title=source_title)
-                    kwargs = {"meta": meta}
-                    if "source" in inspect.signature(chain.search_medias).parameters:
-                        kwargs["source"] = "themoviedb"
-                    media = select_movie_metadata(item, chain.search_medias(**kwargs) or [])
+                    media = select_movie_metadata(
+                        item, self._search_tmdb_movies(source_title, year)
+                    )
                     if not media:
                         douban = chain.match_doubaninfo(
                             name=source_title,

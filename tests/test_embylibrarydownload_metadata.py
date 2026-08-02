@@ -45,6 +45,23 @@ def test_select_movie_metadata_rejects_same_year_partial_title():
     assert selected is None
 
 
+def test_select_movie_metadata_accepts_top_localized_alias_with_poster():
+    item = {"title": "Parasite", "year": 2019, "year_tolerance": 2}
+
+    selected = metadata.select_movie_metadata(
+        item,
+        [{
+            "type": "movie",
+            "title": "寄生虫",
+            "original_title": "기생충",
+            "year": 2019,
+            "poster_path": "https://image.tmdb.org/poster.jpg",
+        }],
+    )
+
+    assert selected["title"] == "寄生虫"
+
+
 def test_scraped_item_uses_chinese_alias_and_preserves_original_title():
     item = {"title": "Citizen Kane", "year": 1941, "position": 0}
     media = {
