@@ -14,9 +14,9 @@ def test_manifest_matches_plugin_version_and_name():
     entry = manifest["EmbyLibraryDownload"]
 
     assert entry["name"] == "联动EMBY库筛选下载"
-    assert entry["version"] == "0.3.17"
+    assert entry["version"] == "0.3.18"
     assert entry["release"] is True
-    assert 'plugin_version = "0.3.17"' in source
+    assert 'plugin_version = "0.3.18"' in source
     assert '"auto_download_cron": ""' in source
     assert '"proxy_enabled": True' in source
     assert 'plugin_icon = "emby.png"' in source
@@ -73,6 +73,9 @@ def test_manifest_matches_plugin_version_and_name():
     assert 'cleanup_old_webdl_version' in service
     assert '/poster/{target_id}/{position}' in source
     assert 'targetPosterUrl(target, item, index)' in page
+    assert '/targets/{target_id}/scrape' in source
+    assert 'scrapeTargetMetadata(target)' in page
+    assert '刮削中文信息' in page
     assert 'plan_pool_candidates' in service
     assert '"pool_sort_by": "year"' in source
     assert '"pool_sort_order": "desc"' in source

@@ -9,6 +9,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 from urllib.parse import urlencode
 
 from app.chain.download import DownloadChain
+from app.chain.media import MediaChain
 from app.chain.search import SearchChain
 from app.chain.storage import StorageChain
 from app.core.context import Context, MediaInfo, TorrentInfo
@@ -37,6 +38,7 @@ from .quality import (
     select_save_path,
     tv_exclusion_reason,
 )
+from .metadata import chinese_title, has_complete_metadata, scraped_item, select_movie_metadata
 from .sources import (
     UBITS_MOVIE_SOURCES,
     build_category_site,
@@ -47,7 +49,7 @@ from .sources import (
 from .replacement import cleanup_old_webdl_version, verify_new_webdl_version
 from .recognition import build_recognition_attempts
 from .qb_repair import build_qb_path_repair_plan
-from .store import PluginStore, dumps
+from .store import PluginStore, dumps, utcnow
 
 
 class ProxySearchChain(SearchChain):
@@ -93,6 +95,95 @@ class LibraryDownloadService:
                 logger.warning(f"[联动EMBY库筛选下载] 读取 {name} 媒体库失败：{error}")
             servers.append({"name": name, "libraries": libraries})
         return {"sites": sites, "emby_servers": servers}
+
+    def scrape_target_metadata(
+        self, target_id: int, progress: Optional[Callable[[dict], None]] = None
+    ) -> dict:
+        """Localize imported movie targets and attach poster URLs through metadata search."""
+
+        target = self.store.get_target(target_id)
+        if not target or not target.get("items"):
+            raise RuntimeError("目标清单不存在或没有影片")
+        items = [dict(item) for item in target["items"]]
+        chain = MediaChain()
+        total = len(items)
+        localized = posters = skipped = not_found = failed = 0
+
+        for index, item in enumerate(items):
+            if has_complete_metadata(item):
+                skipped += 1
+            else:
+                source_title = str(
+                    item.get("original_title") or item.get("title") or ""
+                ).strip()
+                try:
+                    meta = MetaInfo(title=source_title)
+                    meta.type = MediaType.MOVIE
+                    meta.year = str(item.get("year") or "") or None
+                    kwargs = {"meta": meta}
+                    if "source" in inspect.signature(chain.search_medias).parameters:
+                        kwargs["source"] = "themoviedb"
+                    media = select_movie_metadata(item, chain.search_medias(**kwargs) or [])
+                    if not media:
+                        item.update({
+                            "metadata_state": "not_found",
+                            "metadata_error": "未找到年份匹配的电影元数据",
+                            "scraped_at": utcnow(),
+                        })
+                        not_found += 1
+                    else:
+                        media_data = media.to_dict() if hasattr(media, "to_dict") else dict(media)
+                        if not chinese_title(media_data) and media_data.get("tmdb_id"):
+                            try:
+                                douban = chain.get_doubaninfo_by_tmdbid(
+                                    tmdbid=_int(media_data["tmdb_id"]), mtype=MediaType.MOVIE
+                                )
+                                if chinese_title(douban or {}):
+                                    media_data["title"] = chinese_title(douban)
+                            except Exception as error:
+                                logger.warning(
+                                    f"[联动EMBY库筛选下载] 豆瓣中文名回退失败：{error}"
+                                )
+                        items[index] = scraped_item(item, media_data, utcnow())
+                        localized += int(items[index].get("metadata_state") == "complete")
+                        posters += int(bool(items[index].get("poster_url")))
+                except Exception as error:
+                    item.update({
+                        "metadata_state": "failed",
+                        "metadata_error": str(error)[:200],
+                        "scraped_at": utcnow(),
+                    })
+                    failed += 1
+
+            completed = index + 1
+            if completed % 10 == 0 or completed == total:
+                self.store.replace_target_items(target_id, items)
+            if progress and (completed % 5 == 0 or completed == total):
+                progress({
+                    "completed": completed,
+                    "total": total,
+                    "percent": round(completed * 100 / total, 1),
+                    "localized": localized,
+                    "posters": posters,
+                    "skipped": skipped,
+                    "not_found": not_found,
+                    "failed": failed,
+                    "message": f"正在刮削中文信息 {completed} / {total}",
+                })
+
+        return {
+            "target_id": target_id,
+            "total": total,
+            "localized": localized,
+            "posters": posters,
+            "skipped": skipped,
+            "not_found": not_found,
+            "failed": failed,
+            "message": (
+                f"已补充中文名 {localized} 部、海报 {posters} 张；"
+                f"跳过已有 {skipped} 部，未匹配 {not_found + failed} 部"
+            ),
+        }
 
     def sync_inventory(self) -> dict:
         config = self.config()

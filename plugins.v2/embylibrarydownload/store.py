@@ -419,6 +419,19 @@ class PluginStore:
             row = conn.execute("SELECT * FROM targets WHERE id=?", (target_id,)).fetchone()
         return _decode(row) if row else None
 
+    def replace_target_items(self, target_id: int, items: list[dict]) -> dict:
+        normalized = _normalize_imported_target_items(items)
+        if not normalized:
+            raise ValueError("目标清单至少需要一部影片")
+        with self.connect() as conn:
+            result = conn.execute(
+                "UPDATE targets SET items_json=?, updated_at=? WHERE id=?",
+                (dumps(normalized), utcnow(), int(target_id)),
+            )
+            if not result.rowcount:
+                raise ValueError("目标不存在")
+        return self.get_target(int(target_id))
+
     def save_target(self, payload: Mapping[str, Any], target_id: Optional[int] = None) -> dict:
         now = utcnow()
         recommend_source = _none(payload.get("recommend_source"))
@@ -1243,21 +1256,27 @@ def _normalize_imported_target_items(items: Any) -> list[dict]:
             raise ValueError(f"第 {row_number} 行电影名不能为空")
         if not 1888 <= year <= 2100:
             raise ValueError(f"第 {row_number} 行年份必须是 1888–2100 的四位数字")
-        key = (_normalize_title(title), year)
+        original_title = str(item.get("original_title") or "").strip()
+        key = (_normalize_title(original_title or title), year)
         if key in seen:
             continue
         seen.add(key)
-        normalized.append({
+        row = {
             "media_type": "movie",
-            "media_source": "import",
-            "media_id": "",
+            "media_source": str(item.get("media_source") or "import").strip().lower(),
+            "media_id": str(item.get("media_id") or "").strip(),
             "title": title,
-            "original_title": "",
+            "original_title": original_title,
             "year": year,
             "year_tolerance": 2,
-            "poster_url": "",
+            "poster_url": str(item.get("poster_url") or "").strip(),
             "position": len(normalized),
-        })
+        }
+        for field in ("metadata_state", "metadata_error", "scraped_at"):
+            value = str(item.get(field) or "").strip()
+            if value:
+                row[field] = value
+        normalized.append(row)
         if len(normalized) > 1000:
             raise ValueError("单个目标清单最多包含 1000 部影片")
     return normalized

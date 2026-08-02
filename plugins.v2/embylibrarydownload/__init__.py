@@ -70,7 +70,7 @@ class EmbyLibraryDownload(_PluginBase):
     plugin_name = "联动EMBY库筛选下载"
     plugin_desc = "以 Emby 实际媒体版本为准，按站点和质量规则搜索、限量并下载资源。"
     plugin_icon = "emby.png"
-    plugin_version = "0.3.17"
+    plugin_version = "0.3.18"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "embylibrarydownload_"
@@ -154,6 +154,10 @@ class EmbyLibraryDownload(_PluginBase):
             self._route("/targets", self._api_create_target, ["POST"], "新增目标"),
             self._route("/targets/{target_id}", self._api_update_target, ["PUT"], "更新目标"),
             self._route("/targets/{target_id}", self._api_delete_target, ["DELETE"], "删除目标"),
+            self._route(
+                "/targets/{target_id}/scrape", self._api_scrape_target_metadata,
+                ["POST"], "刮削目标中文信息和海报",
+            ),
             self._route("/targets/search", self._api_search_targets, ["POST"], "搜索目标资源"),
             self._route("/candidates", self._api_candidates, ["GET"], "候选种子列表"),
             self._route("/pool/refresh", self._api_refresh_pool, ["POST"], "刷新自定义站点种子池"),
@@ -301,6 +305,12 @@ class EmbyLibraryDownload(_PluginBase):
         except Exception as error:
             return self._error(error)
 
+    def _api_scrape_target_metadata(self, target_id: int) -> dict:
+        if not self._require_store().get_target(target_id):
+            return self._error("目标不存在")
+        task_name = f"metadata:{target_id}"
+        return self._start_task(task_name, self._scrape_target_metadata, target_id)
+
     def _api_delete_target(self, target_id: int) -> dict:
         return self._ok(None, "目标已删除") if self._require_store().delete_target(target_id) \
             else self._error("目标不存在")
@@ -418,6 +428,13 @@ class EmbyLibraryDownload(_PluginBase):
             f"target-pool:{target_id}",
             self._require_service().process_target_from_pool,
             target_id,
+        )
+
+    def _scrape_target_metadata(self, target_id: int) -> dict:
+        task_name = f"metadata:{target_id}"
+        return self._require_service().scrape_target_metadata(
+            target_id,
+            lambda value: self._set_task_progress(task_name, value),
         )
 
     def _dispatch_downloads(self, candidate_keys: List[str]) -> dict:

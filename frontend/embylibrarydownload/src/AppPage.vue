@@ -629,6 +629,17 @@ async function quickSearchTarget(target) {
   startPolling()
 }
 
+function targetMetadataTask(target) {
+  return bootstrap.tasks?.[`metadata:${target?.id}`] || null
+}
+
+async function scrapeTargetMetadata(target) {
+  await call('post', `/targets/${target.id}/scrape`, {})
+  toast?.info?.(`正在为“${target.title}”刮削中文名称和海报`)
+  await loadOverview()
+  startPolling()
+}
+
 async function showTargetCandidates(target) {
   candidates.scope = `target:${target.id}`
   candidates.page = 1
@@ -868,7 +879,7 @@ onBeforeUnmount(() => {
       <VWindowItem value="targets">
         <section aria-labelledby="targets-title">
           <div class="section-heading">
-            <div><h2 id="targets-title">目标清单</h2><p>一个目标对应一个完整推荐榜单或导入清单；清单内每部影片都是待补库项目。</p></div>
+            <div><h2 id="targets-title">目标清单</h2><p>一个目标对应一个完整推荐榜单或导入清单；可刮削中文名称、年份和海报并缓存到本地。</p></div>
             <div class="button-row"><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-magnify" @click="searchTarget()">搜索全部</VBtn><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-file-import-outline" @click="openTargetImport()">导入目标</VBtn><VBtn class="action-btn" color="primary" prepend-icon="mdi-plus" @click="openTarget()">新增目标</VBtn></div>
           </div>
           <VAlert v-if="!targets.length" type="info" variant="tonal">暂无目标清单。可选择“豆瓣电影 Top 250”等推荐榜单，或导入电影名与年份表格。</VAlert>
@@ -886,7 +897,12 @@ onBeforeUnmount(() => {
                   <div><span class="eyebrow">{{ target.recommend_source === 'import/table' ? 'CUSTOM IMPORT' : 'RECOMMENDATION LIST' }}</span><h3>{{ target.title }}</h3><p>{{ target.item_count || target.items?.length || 1 }} 部影片 · 已入库 {{ target.in_library_count || 0 }} · 待补 {{ target.missing_count ?? target.item_count ?? 0 }}</p></div>
                   <div class="target-status"><VChip :color="target.inventory_state === 'present' ? 'success' : target.inventory_state === 'partial' ? 'info' : target.inventory_state === 'missing' ? 'warning' : 'default'" :prepend-icon="target.inventory_state === 'present' ? 'mdi-check-all' : 'mdi-progress-clock'">{{ target.inventory_state === 'present' ? '全部入库' : target.inventory_state === 'partial' ? '补库中' : target.inventory_state === 'missing' ? '等待入库' : '库存未同步' }}</VChip><VChip :color="target.enabled ? 'primary' : 'default'" variant="tonal">{{ target.enabled ? '启用' : '停用' }}</VChip></div>
                 </div>
-                <div class="button-row mt-4"><VBtn color="primary" variant="tonal" prepend-icon="mdi-database-search" @click="quickSearchTarget(target)">匹配已扫描种子</VBtn><VBtn variant="text" @click="showTargetCandidates(target)">查看候选</VBtn><VBtn variant="text" @click="openTarget(target)">编辑规则</VBtn><VBtn variant="text" color="error" @click="deleteTarget(target)">删除清单</VBtn></div>
+                <div class="button-row mt-4"><VBtn color="primary" variant="tonal" prepend-icon="mdi-database-search" @click="quickSearchTarget(target)">匹配已扫描种子</VBtn><VBtn variant="text" prepend-icon="mdi-image-sync-outline" :loading="targetMetadataTask(target)?.status === 'running'" @click="scrapeTargetMetadata(target)">刮削中文信息</VBtn><VBtn variant="text" @click="showTargetCandidates(target)">查看候选</VBtn><VBtn variant="text" @click="openTarget(target)">编辑规则</VBtn><VBtn variant="text" color="error" @click="deleteTarget(target)">删除清单</VBtn></div>
+                <VAlert v-if="targetMetadataTask(target)" :type="targetMetadataTask(target).status === 'failed' ? 'error' : targetMetadataTask(target).status === 'success' ? 'success' : 'info'" variant="tonal" class="mt-3" aria-live="polite">
+                  <strong>{{ targetMetadataTask(target).status === 'running' ? targetMetadataTask(target).progress?.message || '正在刮削中文名称和海报…' : targetMetadataTask(target).result?.message || targetMetadataTask(target).message }}</strong>
+                  <VProgressLinear v-if="targetMetadataTask(target).status === 'running'" :model-value="targetMetadataTask(target).progress?.percent || 0" color="primary" height="7" rounded class="mt-2" />
+                  <small v-if="targetMetadataTask(target).progress?.total" class="d-block mt-2">已完成 {{ targetMetadataTask(target).progress.completed }} / {{ targetMetadataTask(target).progress.total }} · 中文名 {{ targetMetadataTask(target).progress.localized || 0 }} · 海报 {{ targetMetadataTask(target).progress.posters || 0 }} · 未匹配 {{ (targetMetadataTask(target).progress.not_found || 0) + (targetMetadataTask(target).progress.failed || 0) }}</small>
+                </VAlert>
                 <VDivider class="my-4" />
                 <div class="target-item-grid">
                   <article v-for="(item, index) in target.items || [target]" :key="`${item.media_source}:${item.media_id || item.title}`" class="target-item">

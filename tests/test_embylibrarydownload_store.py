@@ -764,6 +764,34 @@ def test_imported_target_normalizes_movies_and_removes_exact_duplicates(tmp_path
     assert all(item["year_tolerance"] == 2 for item in target["items"])
 
 
+def test_imported_target_preserves_scraped_identity_and_poster(tmp_path):
+    store = PluginStore(tmp_path / "state.db")
+    target = store.save_target({
+        "title": "中文电影清单",
+        "recommend_source": "import/table",
+        "items": [{"title": "Citizen Kane", "year": 1941}],
+    })
+
+    updated = store.replace_target_items(target["id"], [{
+        **target["items"][0],
+        "title": "公民凯恩",
+        "original_title": "Citizen Kane",
+        "media_source": "themoviedb",
+        "media_id": "15",
+        "poster_url": "https://image.tmdb.org/t/p/original/poster.jpg",
+        "metadata_state": "complete",
+        "scraped_at": "2026-08-03T00:00:00+08:00",
+    }])
+
+    item = updated["items"][0]
+    assert item["title"] == "公民凯恩"
+    assert item["original_title"] == "Citizen Kane"
+    assert item["media_source"] == "themoviedb"
+    assert item["media_id"] == "15"
+    assert item["poster_url"].endswith("poster.jpg")
+    assert item["metadata_state"] == "complete"
+
+
 def test_imported_target_rejects_rows_without_valid_title_and_year(tmp_path):
     store = PluginStore(tmp_path / "state.db")
 

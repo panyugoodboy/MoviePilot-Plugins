@@ -1,0 +1,52 @@
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+import sys
+
+
+MODULE_PATH = (
+    Path(__file__).parents[1]
+    / "plugins.v2"
+    / "embylibrarydownload"
+    / "metadata.py"
+)
+SPEC = spec_from_file_location("embylibrarydownload_metadata", MODULE_PATH)
+metadata = module_from_spec(SPEC)
+sys.modules[SPEC.name] = metadata
+SPEC.loader.exec_module(metadata)
+
+
+def test_select_movie_metadata_requires_matching_title_and_two_year_range():
+    item = {"title": "Citizen Kane", "year": 1941, "year_tolerance": 2}
+    candidates = [
+        {"type": "电影", "title": "公民凯恩", "original_title": "Citizen Kane", "year": 1941},
+        {"type": "电影", "title": "Citizen Kane", "original_title": "Citizen Kane", "year": 2006},
+        {"type": "电视剧", "title": "公民凯恩", "original_title": "Citizen Kane", "year": 1941},
+    ]
+
+    selected = metadata.select_movie_metadata(item, candidates)
+
+    assert selected["title"] == "公民凯恩"
+    assert selected["year"] == 1941
+
+
+def test_scraped_item_uses_chinese_alias_and_preserves_original_title():
+    item = {"title": "Citizen Kane", "year": 1941, "position": 0}
+    media = {
+        "type": "电影",
+        "source": "themoviedb",
+        "media_id": "15",
+        "title": "Citizen Kane",
+        "names": ["市民ケーン", "公民凯恩"],
+        "original_title": "Citizen Kane",
+        "year": "1941",
+        "poster_path": "https://image.tmdb.org/t/p/original/poster.jpg",
+    }
+
+    result = metadata.scraped_item(item, media, "2026-08-03T00:00:00+08:00")
+
+    assert result["title"] == "公民凯恩"
+    assert result["original_title"] == "Citizen Kane"
+    assert result["media_source"] == "themoviedb"
+    assert result["media_id"] == "15"
+    assert result["metadata_state"] == "complete"
+    assert metadata.has_complete_metadata(result) is True
