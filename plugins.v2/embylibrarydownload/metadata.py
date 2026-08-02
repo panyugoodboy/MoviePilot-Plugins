@@ -16,7 +16,7 @@ def select_movie_metadata(
 ) -> Optional[Any]:
     """Choose the closest movie result by title and the imported ±2 year range."""
 
-    target_title = str(item.get("original_title") or item.get("title") or "").strip()
+    target_title = str(item.get("title") or item.get("original_title") or "").strip()
     target_year = _int(item.get("year"))
     tolerance = max(0, min(2, _int(item.get("year_tolerance"), 2)))
     target_key = _normalize_title(target_title)

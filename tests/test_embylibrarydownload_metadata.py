@@ -45,6 +45,28 @@ def test_select_movie_metadata_rejects_same_year_partial_title():
     assert selected is None
 
 
+def test_select_movie_metadata_ignores_stale_wrong_original_title():
+    item = {
+        "title": "The Shining",
+        "original_title": "Making 'The Shining'",
+        "year": 1980,
+        "year_tolerance": 2,
+    }
+
+    selected = metadata.select_movie_metadata(
+        item,
+        [{
+            "type": "movie",
+            "title": "闪灵",
+            "original_title": "The Shining",
+            "year": 1980,
+            "poster_path": "https://image.tmdb.org/shining.jpg",
+        }],
+    )
+
+    assert selected["title"] == "闪灵"
+
+
 def test_select_movie_metadata_accepts_top_localized_alias_with_poster():
     item = {"title": "Parasite", "year": 2019, "year_tolerance": 2}
 
