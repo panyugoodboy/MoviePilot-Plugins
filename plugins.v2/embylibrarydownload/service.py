@@ -119,11 +119,14 @@ class LibraryDownloadService:
                 try:
                     year = str(item.get("year") or "").strip()
                     query = f"{source_title} ({year})" if year else source_title
-                    kwargs = {"title": query}
-                    if "source" in inspect.signature(chain.search).parameters:
+                    meta = MetaInfo(title=query)
+                    meta.type = MediaType.MOVIE
+                    meta.year = year or None
+                    kwargs = {"metainfo": meta}
+                    if "source" in inspect.signature(chain.recognize_by_meta).parameters:
                         kwargs["source"] = "themoviedb"
-                    _, candidates = chain.search(**kwargs)
-                    media = select_movie_metadata(item, candidates or [])
+                    recognized = chain.recognize_by_meta(**kwargs)
+                    media = select_movie_metadata(item, [recognized] if recognized else [])
                     if not media:
                         item.update({
                             "metadata_state": "not_found",

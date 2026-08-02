@@ -14,10 +14,10 @@ def test_manifest_matches_plugin_version_and_name():
     entry = manifest["EmbyLibraryDownload"]
 
     assert entry["name"] == "联动EMBY库筛选下载"
-    assert entry["version"] == "0.3.19"
+    assert entry["version"] == "0.3.20"
     assert entry["release"] is True
-    assert 'plugin_version = "0.3.19"' in source
-    assert 'chain.search(**kwargs)' in service
+    assert 'plugin_version = "0.3.20"' in source
+    assert 'chain.recognize_by_meta(**kwargs)' in service
     assert 'chain.search_medias(**kwargs)' not in service
     assert '"auto_download_cron": ""' in source
     assert '"proxy_enabled": True' in source
