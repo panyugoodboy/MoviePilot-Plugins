@@ -165,3 +165,6 @@ node_modules/
 !plugins.v2/embylibrarydownload/dist/
 !plugins.v2/embylibrarydownload/dist/assets/
 !plugins.v2/embylibrarydownload/dist/assets/**
+!plugins.v2/mporganizecorrect/dist/
+!plugins.v2/mporganizecorrect/dist/assets/
+!plugins.v2/mporganizecorrect/dist/assets/**

@@ -401,6 +401,19 @@
       "v2.0": "兼容MoviePilot V2"
     }
   },
+  "MPOrganizeCorrect": {
+    "name": "MP整理纠正",
+    "description": "检查 MoviePilot 英文整理结果，按源文件中文片名和年份搜索媒体并安全重新整理。",
+    "labels": "文件整理,媒体识别,工具",
+    "version": "1.0.0",
+    "release": true,
+    "icon": "directory.png",
+    "author": "panyugoodboy",
+    "level": 2,
+    "history": {
+      "v1.0.0": "首个版本：扫描英文整理记录，支持严格匹配批量纠正、人工选片、整理预览、旧媒体安全清理、永久忽略、失败重试、操作审计、Cron 与汇总通知"
+    }
+  },
   "DoubanRank": {
     "name": "豆瓣榜单订阅",
     "description": "监控豆瓣热门榜单，自动添加订阅。",
