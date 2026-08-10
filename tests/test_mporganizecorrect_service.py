@@ -41,7 +41,12 @@ def load_service(monkeypatch):
     modules["app.chain.media"].MediaChain = object
     modules["app.chain.storage"].StorageChain = object
     modules["app.chain.transfer"].TransferChain = object
-    modules["app.core.config"].settings = SimpleNamespace(SCRAP_FOLLOW_TMDB=False)
+    modules["app.core.config"].settings = SimpleNamespace(
+        SCRAP_FOLLOW_TMDB=False,
+        TMDB_IMAGE_URL=lambda path, size="original": (
+            f"https://image.tmdb.org/t/p/{size}/{str(path).lstrip('/')}"
+        ),
+    )
     modules["app.core.metainfo"].MetaInfoPath = object
     modules["app.db.transferhistory_oper"].TransferHistoryOper = object
     modules["app.helper.directory"].DirectoryHelper = object
@@ -55,7 +60,7 @@ def load_service(monkeypatch):
     package = ModuleType(package_name)
     package.__path__ = [str(PLUGIN)]
     monkeypatch.setitem(sys.modules, package_name, package)
-    for child in ("matcher", "store", "service"):
+    for child in ("matcher", "posters", "store", "service"):
         name = f"{package_name}.{child}"
         spec = spec_from_file_location(name, PLUGIN / f"{child}.py")
         module = module_from_spec(spec)
@@ -350,7 +355,7 @@ def test_manual_search_accepts_english_title_without_year_and_uses_fuzzy_query(m
                 douban_id=None,
                 bangumi_id=None,
                 anilist_id=None,
-                poster_path="",
+                poster_path="/wandering-earth.jpg",
             )]
 
     monkeypatch.setattr(service_module, "MediaChain", SearchMediaChain)
@@ -366,6 +371,9 @@ def test_manual_search_accepts_english_title_without_year_and_uses_fuzzy_query(m
 
     assert calls == ["The Wandering Earth"]
     assert results[0]["title"] == "流浪地球"
+    assert results[0]["poster_url"] == (
+        "https://image.tmdb.org/t/p/w500/wandering-earth.jpg"
+    )
 
 
 def test_correction_progress_displays_source_filename(monkeypatch):

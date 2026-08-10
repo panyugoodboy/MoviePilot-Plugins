@@ -15,9 +15,9 @@ def test_manifest_matches_plugin_version_and_safety_contract():
     entry = manifest["MPOrganizeCorrect"]
 
     assert entry["name"] == "MP整理纠正"
-    assert entry["version"] == "1.0.3"
+    assert entry["version"] == "1.0.4"
     assert entry["release"] is True
-    assert 'plugin_version = "1.0.3"' in source
+    assert 'plugin_version = "1.0.4"' in source
     assert '"scan_cron": "0 4 * * *"' in source
     assert '"auto_correct": False' in source
     assert '"cleanup_old_after_correct": True' in source
@@ -33,6 +33,10 @@ def test_manifest_matches_plugin_version_and_safety_contract():
     assert "批量纠正最多 10 条" not in page
     assert "年份（可选）" in page
     assert "模糊搜索" in page
+    assert "MoviePilot 内置模糊搜索" in page
+    assert '"/poster/{token}"' in source
+    assert "allow_anonymous=True" in source
+    assert "candidatePoster" in page
     assert "sourceFileName" in page
     assert "@media(max-width:390px)" in page
     assert "@media(prefers-reduced-motion:reduce)" in page

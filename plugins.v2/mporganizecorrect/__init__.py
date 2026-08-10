@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from copy import deepcopy
+import hashlib
 from threading import Lock, Thread
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import Body
+from fastapi import Body, HTTPException
+from fastapi.responses import FileResponse, Response
 
+from app.core.config import settings
 from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas.types import NotificationType
+from app.utils.http import RequestUtils
 
+from .posters import poster_cache_suffix, poster_request_headers, safe_poster_url
 from .schedule import cron_preview
 from .service import OrganizeCorrectService
 from .store import CorrectionStore
@@ -34,7 +40,7 @@ class MPOrganizeCorrect(_PluginBase):
     plugin_name = "MP整理纠正"
     plugin_desc = "检查 MP 英文整理结果，按源文件片名和可选年份重新识别整理。"
     plugin_icon = "directory.png"
-    plugin_version = "1.0.3"
+    plugin_version = "1.0.4"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "mporganizecorrect_"
@@ -48,6 +54,8 @@ class MPOrganizeCorrect(_PluginBase):
         self._service: Optional[OrganizeCorrectService] = None
         self._task_lock = Lock()
         self._tasks: Dict[str, Dict[str, Any]] = {}
+        self._poster_lock = Lock()
+        self._poster_urls: OrderedDict[str, str] = OrderedDict()
 
     def init_plugin(self, config: dict = None) -> None:
         """加载配置并初始化插件独立数据库与业务服务。"""
@@ -86,9 +94,13 @@ class MPOrganizeCorrect(_PluginBase):
         }]
 
     def get_api(self) -> List[Dict[str, Any]]:
-        """注册带 Bearer 鉴权的插件管理接口。"""
+        """注册管理接口及候选海报同源代理。"""
 
         return [
+            self._route(
+                "/poster/{token}", self._api_poster, ["GET"],
+                "MoviePilot 搜索候选海报", allow_anonymous=True,
+            ),
             self._route("/bootstrap", self._api_bootstrap, ["GET"], "插件初始化数据"),
             self._route("/overview", self._api_overview, ["GET"], "纠正状态总览"),
             self._route("/records", self._api_records, ["GET"], "待纠正记录列表"),
@@ -185,13 +197,17 @@ class MPOrganizeCorrect(_PluginBase):
         keyword: str = "",
         media_type: str = "",
     ) -> dict:
-        return self._ok(self._require_store().list_records(
+        result = self._require_store().list_records(
             page=page,
             page_size=page_size,
             state=state,
             keyword=keyword,
             media_type=media_type,
-        ))
+        )
+        for record in result.get("items") or []:
+            self._attach_poster_tokens([record.get("candidate") or {}])
+            self._attach_poster_tokens(record.get("options") or [])
+        return self._ok(result)
 
     def _api_scan(self, payload: dict = Body(default={})) -> dict:
         return self._start_task(
@@ -202,14 +218,48 @@ class MPOrganizeCorrect(_PluginBase):
 
     def _api_search(self, history_id: int, payload: dict = Body(default={})) -> dict:
         try:
-            return self._ok(self._require_service().search_record(
+            candidates = self._require_service().search_record(
                 history_id,
                 title=str(payload.get("title") or "").strip(),
                 year=int(payload.get("year") or 0),
                 media_type=str(payload.get("media_type") or ""),
-            ))
+            )
+            return self._ok(self._attach_poster_tokens(candidates))
         except Exception as error:
             return self._error(error)
+
+    def _api_poster(self, token: str):
+        token = str(token or "").lower()
+        with self._poster_lock:
+            url = self._poster_urls.get(token)
+        if not url:
+            raise HTTPException(status_code=404, detail="搜索候选海报不存在或已过期")
+
+        cache_dir = self.get_data_path() / "poster_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cached = next((path for path in cache_dir.glob(f"{token}.*") if path.is_file()), None)
+        cache_headers = {"Cache-Control": "public, max-age=604800"}
+        if cached:
+            return FileResponse(cached, headers=cache_headers)
+
+        try:
+            response = RequestUtils(
+                headers=poster_request_headers(url),
+                proxies=getattr(settings, "PROXY", None),
+                timeout=20,
+            ).get_res(url)
+        except Exception as error:
+            logger.warning(f"[MP整理纠正] 获取搜索候选海报失败：{error}")
+            raise HTTPException(status_code=502, detail="搜索候选海报获取失败") from error
+        if not response or not response.ok:
+            raise HTTPException(status_code=502, detail="搜索候选海报源请求失败")
+        content_type = str((response.headers or {}).get("Content-Type") or "").split(";", 1)[0]
+        content = response.content
+        if not content or not content_type.lower().startswith("image/") or len(content) > 15 * 1024 ** 2:
+            raise HTTPException(status_code=502, detail="搜索候选海报源返回无效内容")
+        cache_file = cache_dir / f"{token}{poster_cache_suffix(url, content_type)}"
+        cache_file.write_bytes(content)
+        return Response(content=content, media_type=content_type, headers=cache_headers)
 
     def _api_preview(self, history_id: int, payload: dict = Body(default={})) -> dict:
         try:
@@ -401,15 +451,45 @@ class MPOrganizeCorrect(_PluginBase):
             raise RuntimeError("插件服务尚未初始化")
         return self._service
 
+    def _attach_poster_tokens(self, candidates: list) -> list:
+        """为 MoviePilot 搜索候选注册不可伪造的同源海报代理令牌。"""
+
+        extra_hosts = [str(getattr(settings, "TMDB_IMAGE_DOMAIN", "") or "")]
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            candidate.pop("poster_token", None)
+            url = safe_poster_url(candidate.get("poster_url"), extra_hosts)
+            if not url:
+                continue
+            token = hashlib.sha256(url.encode("utf-8")).hexdigest()
+            with self._poster_lock:
+                self._poster_urls[token] = url
+                self._poster_urls.move_to_end(token)
+                while len(self._poster_urls) > 2048:
+                    self._poster_urls.popitem(last=False)
+            candidate["poster_token"] = token
+        return candidates
+
     @staticmethod
-    def _route(path: str, endpoint, methods: List[str], summary: str) -> Dict[str, Any]:
-        return {
+    def _route(
+        path: str,
+        endpoint,
+        methods: List[str],
+        summary: str,
+        allow_anonymous: bool = False,
+    ) -> Dict[str, Any]:
+        route = {
             "path": path,
             "endpoint": endpoint,
             "methods": methods,
             "summary": summary,
-            "auth": "bear",
         }
+        if allow_anonymous:
+            route["allow_anonymous"] = True
+        else:
+            route["auth"] = "bear"
+        return route
 
     @staticmethod
     def _ok(data: Any = None, message: str = "") -> dict:

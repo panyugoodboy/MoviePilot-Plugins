@@ -32,6 +32,7 @@ const deleteDialog = ref(false)
 const manualLoading = ref(false)
 const batchLoading = ref(false)
 const batchPreviews = ref([])
+const brokenPosters = ref(new Set())
 const manual = reactive({
   record: null,
   title: '',
@@ -214,6 +215,7 @@ async function searchManual() {
   manualLoading.value = true
   manual.preview = null
   manual.candidate = null
+  brokenPosters.value = new Set()
   try {
     manual.candidates = await call('post', `/records/${manual.record.history_id}/search`, {
       title: manual.title,
@@ -314,6 +316,25 @@ function sourceFileName(path) {
   return String(path || '未知源文件').replace(/\\/g, '/').split('/').pop()
 }
 
+function posterKey(candidate) {
+  return String(candidate?.poster_token || candidate?.poster_url || '')
+}
+
+function candidatePoster(candidate) {
+  const key = posterKey(candidate)
+  if (!key || brokenPosters.value.has(key)) return ''
+  if (candidate?.poster_token) {
+    return `/api/v1/plugin/${encodeURIComponent(props.pluginId)}/poster/${candidate.poster_token}`
+  }
+  return /^https?:\/\//i.test(String(candidate?.poster_url || '')) ? candidate.poster_url : ''
+}
+
+function markPosterBroken(candidate) {
+  const next = new Set(brokenPosters.value)
+  next.add(posterKey(candidate))
+  brokenPosters.value = next
+}
+
 function auditStatus(value) {
   if (value === 'success') return { text: '成功', color: 'success' }
   if (value === 'cleanup_pending') return { text: '待清理', color: 'warning' }
@@ -376,7 +397,7 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
         <VDataTable v-model="selected" :headers="recordHeaders" :items="records.items" item-value="history_id" :loading="loading" show-select class="desktop-table" :items-per-page="50" hide-default-footer>
           <template #item.old_title="{ item }"><div class="title-cell"><strong>{{ item.old_title }}</strong><span>{{ item.old_year || '年份未知' }} · {{ item.media_type || '类型未知' }}</span><small :title="item.old_dest">{{ item.old_dest }}</small></div></template>
           <template #item.query_title="{ item }"><div class="title-cell"><strong>{{ item.query_title || '未提取到片名' }}</strong><span>{{ item.query_year || '年份未知' }}</span><small :title="item.src">源文件：{{ sourceFileName(item.src) }}</small></div></template>
-          <template #item.candidate="{ item }"><div v-if="item.candidate?.media_id" class="candidate-inline"><VAvatar rounded="lg" size="48"><VImg v-if="item.candidate.poster_url" :src="item.candidate.poster_url" :alt="`${item.candidate.title} 海报`" cover loading="lazy" /><VIcon v-else icon="mdi-movie-open-outline" /></VAvatar><div><strong>{{ item.candidate.title }}</strong><span>{{ item.candidate.year }} · {{ item.candidate.original_title || item.candidate.media_source }}</span></div></div><span v-else class="muted">尚无唯一候选</span></template>
+          <template #item.candidate="{ item }"><div v-if="item.candidate?.media_id" class="candidate-inline"><VAvatar rounded="lg" size="48"><VImg v-if="candidatePoster(item.candidate)" :src="candidatePoster(item.candidate)" :alt="`${item.candidate.title} 海报`" cover loading="lazy" @error="markPosterBroken(item.candidate)" /><VIcon v-else icon="mdi-movie-open-outline" /></VAvatar><div><strong>{{ item.candidate.title }}</strong><span>{{ item.candidate.year }} · {{ item.candidate.original_title || item.candidate.media_source }}</span></div></div><span v-else class="muted">尚无唯一候选</span></template>
           <template #item.state="{ item }"><VChip :color="stateMeta(item.state,item.ignored).color" :prepend-icon="stateMeta(item.state,item.ignored).icon" variant="tonal" size="small">{{ stateMeta(item.state,item.ignored).text }}</VChip><small class="reason">{{ item.reason }}</small></template>
           <template #item.actions="{ item }"><div class="row-actions"><VBtn icon="mdi-account-search-outline" variant="text" aria-label="人工匹配" @click="openManual(item)" /><VBtn v-if="item.state==='cleanup_pending'" icon="mdi-broom" color="warning" variant="text" aria-label="重试清理旧媒体" @click="retryCleanup(item)" /></div></template>
           <template #bottom><VPagination v-if="records.total>50" v-model="records.page" :length="Math.ceil(records.total/50)" total-visible="7" class="pa-2" @update:model-value="loadRecords" /></template>
@@ -401,7 +422,7 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
     </VWindow>
 
     <VDialog v-model="manualDialog" max-width="980" scrollable>
-      <VCard><VCardTitle class="dialog-title"><div><span>人工匹配与整理预览</span><small>源文件：{{ sourceFileName(manual.record?.src) }}</small></div><VBtn icon="mdi-close" variant="text" aria-label="关闭" @click="manualDialog=false" /></VCardTitle><VCardText><VAlert type="success" variant="tonal" icon="mdi-shield-lock-outline" class="mb-4">源文件为只读保护对象。插件没有删除源文件的接口。</VAlert><div class="manual-search"><VTextField v-model="manual.title" label="片名（中文或英文）" /><VTextField v-model.number="manual.year" type="number" min="1888" max="2100" label="年份（可选）" clearable /><VSelect v-model="manual.media_type" label="媒体类型" :items="['电影','电视剧']" /><VBtn class="action-btn" color="primary" variant="tonal" prepend-icon="mdi-movie-search-outline" :loading="manualLoading" @click="searchManual">模糊搜索</VBtn></div><VProgressLinear v-if="manualLoading" indeterminate color="primary" class="my-3" aria-label="正在搜索或预览" /><div v-if="manual.candidates.length" class="candidate-grid"><button v-for="candidate in manual.candidates" :key="`${candidate.media_source}:${candidate.media_id}:${candidate.media_type}`" type="button" class="candidate-card" :class="{'candidate-card--selected':manual.candidate?.media_id===candidate.media_id && manual.candidate?.media_source===candidate.media_source}" :aria-pressed="manual.candidate?.media_id===candidate.media_id && manual.candidate?.media_source===candidate.media_source" @click="chooseCandidate(candidate)"><div class="poster-wrap"><VImg v-if="candidate.poster_url" :src="candidate.poster_url" :alt="`${candidate.title} 海报`" aspect-ratio="2/3" cover loading="lazy" /><VIcon v-else icon="mdi-movie-open-outline" size="42" /></div><strong>{{ candidate.title }}</strong><span>{{ candidate.year || '年份未知' }}</span><small>{{ candidate.original_title || `${candidate.media_source}:${candidate.media_id}` }}</small></button></div><VAlert v-else type="info" variant="tonal">输入中文或英文片名，可不填年份进行模糊搜索。</VAlert><VCard v-if="manual.preview" variant="outlined" class="preview-card mt-4"><VCardText><h3>整理路径预览</h3><div class="path-diff"><div><span>旧英文目标</span><code>{{ manual.preview.old_target?.path }}</code></div><VIcon icon="mdi-arrow-right" /><div><span>新中文目标</span><code>{{ manual.preview.new_target?.path }}</code></div></div><VSwitch v-model="manual.cleanup_old" label="新目标验证成功后删除旧英文媒体" color="primary" hide-details class="mt-3" /></VCardText></VCard></VCardText><VCardActions><VBtn variant="text" @click="manualDialog=false">取消</VBtn><VSpacer /><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-eye-outline" :disabled="!manual.candidate" :loading="manualLoading" @click="previewManual">预览路径</VBtn><VBtn class="action-btn" color="primary" prepend-icon="mdi-folder-sync-outline" :disabled="!manual.preview" @click="correctManual">确认重新整理</VBtn></VCardActions></VCard>
+      <VCard><VCardTitle class="dialog-title"><div><span>人工匹配与整理预览</span><small>源文件：{{ sourceFileName(manual.record?.src) }}</small></div><VBtn icon="mdi-close" variant="text" aria-label="关闭" @click="manualDialog=false" /></VCardTitle><VCardText><VAlert type="success" variant="tonal" icon="mdi-shield-lock-outline" class="mb-4">源文件为只读保护对象。插件没有删除源文件的接口。</VAlert><div class="manual-search"><VTextField v-model="manual.title" label="片名（中文或英文）" /><VTextField v-model.number="manual.year" type="number" min="1888" max="2100" label="年份（可选）" clearable /><VSelect v-model="manual.media_type" label="媒体类型" :items="['电影','电视剧']" /><VBtn class="action-btn" color="primary" variant="tonal" prepend-icon="mdi-movie-search-outline" :loading="manualLoading" @click="searchManual">MoviePilot 内置模糊搜索</VBtn></div><VProgressLinear v-if="manualLoading" indeterminate color="primary" class="my-3" aria-label="正在搜索或预览" /><div v-if="manual.candidates.length" class="candidate-grid"><button v-for="candidate in manual.candidates" :key="`${candidate.media_source}:${candidate.media_id}:${candidate.media_type}`" type="button" class="candidate-card" :class="{'candidate-card--selected':manual.candidate?.media_id===candidate.media_id && manual.candidate?.media_source===candidate.media_source}" :aria-pressed="manual.candidate?.media_id===candidate.media_id && manual.candidate?.media_source===candidate.media_source" @click="chooseCandidate(candidate)"><div class="poster-wrap"><VImg v-if="candidatePoster(candidate)" :src="candidatePoster(candidate)" :alt="`${candidate.title} 海报`" aspect-ratio="2/3" cover loading="lazy" @error="markPosterBroken(candidate)" /><VIcon v-else icon="mdi-movie-open-outline" size="42" /></div><strong>{{ candidate.title }}</strong><span>{{ candidate.year || '年份未知' }}</span><small>{{ candidate.original_title || `${candidate.media_source}:${candidate.media_id}` }}</small></button></div><VAlert v-else type="info" variant="tonal">调用 MoviePilot 内置媒体搜索；输入中文或英文片名，年份可以不填。</VAlert><VCard v-if="manual.preview" variant="outlined" class="preview-card mt-4"><VCardText><h3>整理路径预览</h3><div class="path-diff"><div><span>旧英文目标</span><code>{{ manual.preview.old_target?.path }}</code></div><VIcon icon="mdi-arrow-right" /><div><span>新中文目标</span><code>{{ manual.preview.new_target?.path }}</code></div></div><VSwitch v-model="manual.cleanup_old" label="新目标验证成功后删除旧英文媒体" color="primary" hide-details class="mt-3" /></VCardText></VCard></VCardText><VCardActions><VBtn variant="text" @click="manualDialog=false">取消</VBtn><VSpacer /><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-eye-outline" :disabled="!manual.candidate" :loading="manualLoading" @click="previewManual">预览路径</VBtn><VBtn class="action-btn" color="primary" prepend-icon="mdi-folder-sync-outline" :disabled="!manual.preview" @click="correctManual">确认重新整理</VBtn></VCardActions></VCard>
     </VDialog>
 
     <VDialog v-model="batchDialog" max-width="620">

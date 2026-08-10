@@ -29,6 +29,7 @@ from .matcher import (
     safe_transfer_mode,
     serialize_media,
 )
+from .posters import normalize_poster_url
 from .store import CorrectionStore
 
 
@@ -367,6 +368,11 @@ class OrganizeCorrectService:
         seen = set()
         for media in medias or []:
             item = serialize_media(media)
+            item["poster_url"] = normalize_poster_url(
+                item.get("poster_url"),
+                item.get("media_source"),
+                getattr(settings, "TMDB_IMAGE_URL", None),
+            )
             if expected and self._media_type(item.get("media_type")) != expected:
                 continue
             key = (item.get("media_source"), item.get("media_id"), item.get("media_type"))

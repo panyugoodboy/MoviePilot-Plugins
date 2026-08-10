@@ -119,9 +119,15 @@ def serialize_media(media: Any) -> dict:
     poster = ""
     getter = getattr(media, "get_poster_image", None)
     if callable(getter):
-        poster = str(getter() or "").strip()
+        try:
+            poster = str(getter() or "").strip()
+        except Exception:
+            poster = ""
     if not poster:
-        poster = str(_value(media, "poster_path") or _value(media, "poster_url") or "").strip()
+        poster = str(next((
+            _value(media, key) for key in ("poster_path", "poster_url", "image", "cover_url")
+            if _value(media, key)
+        ), "") or "").strip()
     return {
         "media_type": str(media_type or ""),
         "media_source": source,
