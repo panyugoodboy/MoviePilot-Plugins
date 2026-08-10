@@ -79,3 +79,12 @@ def test_store_records_cleanup_state_and_audit(tmp_path):
     assert audit_id == 1
     assert store.stats()["cleanup_pending"] == 1
     assert store.list_audits()["items"][0]["new_title"] == "流浪地球"
+
+
+def test_list_ready_has_no_limit_unless_explicitly_requested(tmp_path):
+    store = store_module.CorrectionStore(tmp_path / "correct.db")
+    for history_id in range(1, 76):
+        store.upsert_record(sample_record(history_id))
+
+    assert len(store.list_ready()) == 75
+    assert len(store.list_ready(5)) == 5

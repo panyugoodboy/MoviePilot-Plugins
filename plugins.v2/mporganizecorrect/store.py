@@ -126,18 +126,20 @@ class CorrectionStore:
             ).fetchall()
         return {"items": [self._record(row) for row in rows], "total": total}
 
-    def list_ready(self, limit: int) -> list[dict]:
-        """获取定时任务允许自动纠正的电影精确匹配项。"""
+    def list_ready(self, limit: Optional[int] = None) -> list[dict]:
+        """获取允许自动纠正的电影精确匹配项；不传数量时返回全部。"""
 
+        sql = """
+            SELECT * FROM corrections
+            WHERE state='ready' AND ignored=0 AND media_type IN ('电影', 'movie')
+            ORDER BY updated_at ASC, history_id ASC
+        """
+        params = ()
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (max(1, min(50, int(limit))),)
         with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT * FROM corrections
-                WHERE state='ready' AND ignored=0 AND media_type IN ('电影', 'movie')
-                ORDER BY updated_at ASC, history_id ASC LIMIT ?
-                """,
-                (max(1, min(50, int(limit))),),
-            ).fetchall()
+            rows = connection.execute(sql, params).fetchall()
         return [self._record(row) for row in rows]
 
     def set_state(

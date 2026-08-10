@@ -145,6 +145,30 @@ class OrganizeCorrectService:
         finally:
             self._operation_lock.release()
 
+    def correct_all_ready(
+        self,
+        *,
+        cleanup_old: bool,
+        progress: Optional[Callable[[dict], None]] = None,
+    ) -> dict:
+        """纠正全部唯一精确匹配电影，不受分页或批次数量限制。"""
+
+        if not self._operation_lock.acquire(blocking=False):
+            raise RuntimeError("已有扫描、纠正或清理任务正在运行")
+        try:
+            items = [
+                {"history_id": record["history_id"], "candidate": record.get("candidate") or {}}
+                for record in self.store.list_ready()
+            ]
+            return self._correct_records(
+                items,
+                cleanup_old=cleanup_old,
+                automatic=True,
+                progress=progress,
+            )
+        finally:
+            self._operation_lock.release()
+
     def set_ignored(self, history_ids: Iterable[int], ignored: bool) -> int:
         """批量永久忽略或恢复待纠正记录。"""
 

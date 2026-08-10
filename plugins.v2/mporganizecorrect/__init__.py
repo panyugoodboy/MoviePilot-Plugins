@@ -34,7 +34,7 @@ class MPOrganizeCorrect(_PluginBase):
     plugin_name = "MP整理纠正"
     plugin_desc = "检查 MP 英文整理结果，按源文件中文片名和年份重新识别整理。"
     plugin_icon = "directory.png"
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "mporganizecorrect_"
@@ -100,6 +100,9 @@ class MPOrganizeCorrect(_PluginBase):
                 "/records/{history_id}/preview", self._api_preview, ["POST"], "预览重新整理路径"
             ),
             self._route("/records/correct", self._api_correct, ["POST"], "批量重新整理"),
+            self._route(
+                "/records/correct-all", self._api_correct_all, ["POST"], "纠正全部精确匹配记录"
+            ),
             self._route("/records/ignore", self._api_ignore, ["POST"], "设置忽略状态"),
             self._route("/records/cleanup", self._api_cleanup, ["POST"], "重试清理旧媒体"),
             self._route("/records/delete", self._api_delete, ["POST"], "删除旧媒体或原记录"),
@@ -218,12 +221,17 @@ class MPOrganizeCorrect(_PluginBase):
         items = payload.get("items") or []
         if not items:
             return self._error("请选择至少一条待纠正记录")
-        if len(items) > 10:
-            return self._error("手动批量纠正每次最多 10 条")
         return self._start_task(
             "correct",
             self._run_correct,
             items,
+            bool(payload.get("cleanup_old", self._config.get("cleanup_old_after_correct", True))),
+        )
+
+    def _api_correct_all(self, payload: dict = Body(default={})) -> dict:
+        return self._start_task(
+            "correct-all",
+            self._run_correct_all,
             bool(payload.get("cleanup_old", self._config.get("cleanup_old_after_correct", True))),
         )
 
@@ -287,6 +295,14 @@ class MPOrganizeCorrect(_PluginBase):
             progress=lambda value: self._set_task_progress("correct", value),
         )
         self._notify_summary("重新整理", result)
+        return result
+
+    def _run_correct_all(self, cleanup_old: bool) -> dict:
+        result = self._require_service().correct_all_ready(
+            cleanup_old=cleanup_old,
+            progress=lambda value: self._set_task_progress("correct-all", value),
+        )
+        self._notify_summary("全部纠正", result)
         return result
 
     def _run_cleanup(self, history_ids: list) -> dict:

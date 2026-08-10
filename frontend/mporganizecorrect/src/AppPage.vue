@@ -27,6 +27,7 @@ const records = reactive({ items: [], total: 0, page: 1, state: '', keyword: '',
 const audits = reactive({ items: [], total: 0, page: 1 })
 const manualDialog = ref(false)
 const batchDialog = ref(false)
+const allDialog = ref(false)
 const deleteDialog = ref(false)
 const manualLoading = ref(false)
 const batchLoading = ref(false)
@@ -73,7 +74,7 @@ const hasRunningTask = computed(() => Object.values(bootstrap.tasks || {}).some(
 const runningTask = computed(() => Object.values(bootstrap.tasks || {}).find(item => item.status === 'running') || null)
 const selectedRecords = computed(() => records.items.filter(item => selected.value.includes(item.history_id)))
 const batchableRecords = computed(() => selectedRecords.value.filter(item => item.state === 'ready' && item.candidate?.media_id))
-const canBatch = computed(() => selectedRecords.value.length > 0 && selectedRecords.value.length <= 10 && batchableRecords.value.length === selectedRecords.value.length)
+const canBatch = computed(() => selectedRecords.value.length > 0 && batchableRecords.value.length === selectedRecords.value.length)
 
 async function call(method, path, payload, params) {
   try {
@@ -179,6 +180,20 @@ async function submitBatch() {
   const items = batchableRecords.value.map(item => ({ history_id: item.history_id, candidate: item.candidate }))
   batchDialog.value = false
   await startTask('/records/correct', { items, cleanup_old: manual.cleanup_old }, `已开始纠正 ${items.length} 条记录`)
+}
+
+function openCorrectAll() {
+  manual.cleanup_old = bootstrap.config.cleanup_old_after_correct !== false
+  allDialog.value = true
+}
+
+async function submitCorrectAll() {
+  allDialog.value = false
+  await startTask(
+    '/records/correct-all',
+    { cleanup_old: manual.cleanup_old },
+    `已开始纠正全部 ${bootstrap.stats?.ready || 0} 条可纠正记录`,
+  )
 }
 
 function openManual(record) {
@@ -350,9 +365,9 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
       </VWindowItem>
 
       <VWindowItem value="records">
-        <section class="section-heading"><div><h2>英文整理记录</h2><p>批量纠正只接受唯一精确匹配的电影；其他记录请人工选择候选。</p></div><div class="button-row"><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-radar" :disabled="hasRunningTask" @click="scan(false)">增量扫描</VBtn><VBtn class="action-btn" variant="text" prepend-icon="mdi-database-refresh-outline" :disabled="hasRunningTask" @click="scan(true)">全量重扫</VBtn></div></section>
+        <section class="section-heading"><div><h2>英文整理记录</h2><p>批量纠正只接受唯一精确匹配的电影；其他记录请人工选择候选。</p></div><div class="button-row"><VBtn class="action-btn" color="primary" prepend-icon="mdi-folder-multiple-check-outline" :disabled="hasRunningTask || !(bootstrap.stats?.ready > 0)" @click="openCorrectAll">一键全部纠正</VBtn><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-radar" :disabled="hasRunningTask" @click="scan(false)">增量扫描</VBtn><VBtn class="action-btn" variant="text" prepend-icon="mdi-database-refresh-outline" :disabled="hasRunningTask" @click="scan(true)">全量重扫</VBtn></div></section>
         <div class="filter-row"><VTextField v-model="records.keyword" label="搜索标题或路径" prepend-inner-icon="mdi-magnify" clearable hide-details @keyup.enter="records.page=1;loadRecords()" /><VSelect v-model="records.state" label="处理状态" :items="stateItems" hide-details @update:model-value="records.page=1;loadRecords()" /><VSelect v-model="records.media_type" label="媒体类型" :items="[{title:'全部',value:''},{title:'电影',value:'电影'},{title:'电视剧',value:'电视剧'}]" hide-details @update:model-value="records.page=1;loadRecords()" /><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-filter-check-outline" @click="records.page=1;loadRecords()">筛选</VBtn></div>
-        <div class="selection-bar"><span>已选择 {{ selected.length }} 条<span v-if="selected.length>10">（批量纠正最多 10 条）</span></span><VSpacer /><VBtn variant="text" prepend-icon="mdi-eye-off-outline" :disabled="!selected.length" @click="setIgnored(records.state !== 'ignored')">{{ records.state === 'ignored' ? '恢复' : '忽略' }}</VBtn><VBtn color="primary" variant="tonal" prepend-icon="mdi-folder-sync-outline" :disabled="!canBatch" :loading="batchLoading" @click="openBatch">批量纠正</VBtn><VBtn color="error" variant="text" prepend-icon="mdi-delete-outline" :disabled="!selected.length" @click="openDelete">删除</VBtn></div>
+        <div class="selection-bar"><span>已选择 {{ selected.length }} 条</span><VSpacer /><VBtn variant="text" prepend-icon="mdi-eye-off-outline" :disabled="!selected.length" @click="setIgnored(records.state !== 'ignored')">{{ records.state === 'ignored' ? '恢复' : '忽略' }}</VBtn><VBtn color="primary" variant="tonal" prepend-icon="mdi-folder-sync-outline" :disabled="!canBatch" :loading="batchLoading" @click="openBatch">批量纠正</VBtn><VBtn color="error" variant="text" prepend-icon="mdi-delete-outline" :disabled="!selected.length" @click="openDelete">删除</VBtn></div>
 
         <VDataTable v-model="selected" :headers="recordHeaders" :items="records.items" item-value="history_id" :loading="loading" show-select class="desktop-table" :items-per-page="50" hide-default-footer>
           <template #item.old_title="{ item }"><div class="title-cell"><strong>{{ item.old_title }}</strong><span>{{ item.old_year || '年份未知' }} · {{ item.media_type || '类型未知' }}</span><small :title="item.old_dest">{{ item.old_dest }}</small></div></template>
@@ -387,6 +402,10 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
 
     <VDialog v-model="batchDialog" max-width="620">
       <VCard><VCardTitle>确认批量重新整理</VCardTitle><VCardText><VAlert type="success" variant="tonal" icon="mdi-lock-outline" class="mb-4">已逐条完成 {{ batchPreviews.length }} 条路径预览。源文件不会被删除或移动。</VAlert><div class="batch-preview-list"><div v-for="item in batchPreviews" :key="item.history_id"><span>{{ item.candidate?.title }} ({{ item.candidate?.year }})</span><code>{{ item.old_target?.path }}</code><VIcon icon="mdi-arrow-down" size="18" /><code>{{ item.new_target?.path }}</code></div></div><VSwitch v-model="manual.cleanup_old" label="新媒体与新记录验证成功后删除旧英文媒体" color="primary" /><p class="muted">任意记录失败时，该记录的旧媒体保持不动，原整理记录会自动恢复。</p></VCardText><VCardActions><VSpacer /><VBtn variant="text" @click="batchDialog=false">取消</VBtn><VBtn class="action-btn" color="primary" prepend-icon="mdi-folder-sync-outline" :disabled="batchPreviews.length!==batchableRecords.length" @click="submitBatch">开始纠正</VBtn></VCardActions></VCard>
+    </VDialog>
+
+    <VDialog v-model="allDialog" max-width="620">
+      <VCard><VCardTitle>确认一键全部纠正</VCardTitle><VCardText><VAlert type="warning" variant="tonal" icon="mdi-folder-multiple-check-outline" class="mb-4">将处理全部 {{ bootstrap.stats?.ready || 0 }} 条可纠正记录，不受当前分页、筛选或批次数量限制。</VAlert><p>只处理中文片名、年份和媒体类型唯一精确匹配的电影。后台会对每条记录重新预览并验证新目标，失败记录不会删除旧媒体。</p><VSwitch v-model="manual.cleanup_old" label="新媒体与新记录验证成功后删除旧英文媒体" color="primary" /></VCardText><VCardActions><VSpacer /><VBtn variant="text" @click="allDialog=false">取消</VBtn><VBtn class="action-btn" color="primary" prepend-icon="mdi-folder-multiple-check-outline" @click="submitCorrectAll">全部纠正</VBtn></VCardActions></VCard>
     </VDialog>
 
     <VDialog v-model="deleteDialog" max-width="620">

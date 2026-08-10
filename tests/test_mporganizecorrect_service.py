@@ -299,3 +299,33 @@ def test_failed_correction_restores_record_and_keeps_source_and_old_media(tmp_pa
     assert old_dest.exists()
     assert not new_dest.exists()
     assert service_module.settings.SCRAP_FOLLOW_TMDB is False
+
+
+def test_correct_all_ready_processes_every_ready_record(monkeypatch):
+    service_module, _, _ = load_service(monkeypatch)
+
+    class ReadyStore:
+        requested_limit = "unset"
+
+        def list_ready(self, limit=None):
+            self.requested_limit = limit
+            return [
+                {"history_id": history_id, "candidate": {"media_id": str(history_id)}}
+                for history_id in range(1, 76)
+            ]
+
+    store = ReadyStore()
+    service = service_module.OrganizeCorrectService(store, lambda: {})
+    captured = {}
+
+    def fake_correct(items, **kwargs):
+        captured.update(items=list(items), **kwargs)
+        return {"total": len(captured["items"]), "success": len(captured["items"]), "failed": 0}
+
+    monkeypatch.setattr(service, "_correct_records", fake_correct)
+    result = service.correct_all_ready(cleanup_old=True)
+
+    assert store.requested_limit is None
+    assert result["total"] == 75
+    assert captured["automatic"] is True
+    assert captured["cleanup_old"] is True
