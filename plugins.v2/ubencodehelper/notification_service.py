@@ -51,6 +51,33 @@ class NotificationService:
             text=self.event_text(event),
         )
 
+    @staticmethod
+    def client_update_text(release: dict, current_version: str) -> str:
+        release = dict(release or {})
+        latest_version = str(release.get("version") or "未知")
+        lines = [
+            f"发现 UBencode 客户端新版本：{latest_version}",
+            f"当前版本：{str(current_version or '未知')}",
+            "",
+            "更新内容：",
+        ]
+        changelog = release.get("changelog") or []
+        if isinstance(changelog, list):
+            for item in changelog:
+                if isinstance(item, dict):
+                    version = str(item.get("version") or "").strip()
+                    content = str(
+                        item.get("content") or item.get("description") or item.get("text") or ""
+                    ).strip()
+                    line = f"{version}：{content}" if version and content else content or version
+                else:
+                    line = str(item or "").strip()
+                if line:
+                    lines.append(f"• {line}")
+        if len(lines) == 4:
+            lines.append("• 服务端未提供更新说明")
+        return "\n".join(lines)
+
     @classmethod
     def event_text(cls, event: dict) -> str:
         event_type = str(event.get("event_type") or "")

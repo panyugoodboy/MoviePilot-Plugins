@@ -72,6 +72,48 @@ def test_remote_command_api_targets_explicit_device_and_uses_idempotency():
     assert calls[1]["url"].endswith("/api/ubencode/remote-commands/cmd_1")
 
 
+def test_latest_release_api_and_version_comparison():
+    api = load_api_client()
+    calls = []
+
+    class Response:
+        ok = True
+
+        @staticmethod
+        def json():
+            return {"release": {"version": "1.7.0", "changelog": ["修复更新检查"]}}
+
+    original = api.requests.request
+    try:
+        api.requests.request = lambda **kwargs: calls.append(kwargs) or Response()
+        client = api.UBencodeApiClient("moviepilot-device")
+        result = client.latest_release("token")
+    finally:
+        api.requests.request = original
+
+    assert result["release"]["version"] == "1.7.0"
+    assert calls[0]["url"].endswith("/api/ubencode/releases/latest")
+    assert calls[0]["params"]["client_version"] == api.CLIENT_VERSION
+    assert api.is_newer_version("1.7.0", "1.6.2")
+    assert not api.is_newer_version("1.6.2", "1.6.2")
+
+
+def test_client_update_notification_includes_changelog():
+    service = load_notification_service().NotificationService
+    text = service.client_update_text(
+        {
+            "version": "1.7.0",
+            "changelog": ["新增客户端版本检查", {"version": "1.6.3", "content": "修复问题"}],
+        },
+        "1.6.2",
+    )
+    assert "发现 UBencode 客户端新版本：1.7.0" in text
+    assert "当前版本：1.6.2" in text
+    assert "• 新增客户端版本检查" in text
+    assert "• 1.6.3：修复问题" in text
+    assert "• 服务端未提供更新说明" in service.client_update_text({"version": "1.7.0"}, "1.6.2")
+
+
 def test_plugin_registers_multi_client_buttons_and_two_stage_publish():
     source = (ROOT / "plugins.v2" / "ubencodehelper" / "__init__.py").read_text(encoding="utf-8")
     manifest = json.loads((ROOT / "package.v2.json").read_text(encoding="utf-8"))
@@ -82,7 +124,7 @@ def test_plugin_registers_multi_client_buttons_and_two_stage_publish():
     assert "prepare_publish" in source
     assert "confirm_publish" in source
     assert "confirm_token" in source
-    assert manifest["UBencodeHelper"]["version"] == "1.3.1"
+    assert manifest["UBencodeHelper"]["version"] == "1.3.2"
 
 
 def test_notifications_append_source_percentage_to_absolute_mbps():

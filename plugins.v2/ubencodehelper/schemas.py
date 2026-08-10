@@ -16,6 +16,7 @@ class DownloaderCheckRequest(BaseModel):
 
 class ConfigCheckRequest(DownloaderCheckRequest):
     cron: str = Field(min_length=1, max_length=128)
+    version_check_cron: str = Field(default="", max_length=128)
 
 
 class TaskActionRequest(BaseModel):

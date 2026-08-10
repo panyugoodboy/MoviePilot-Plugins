@@ -15,7 +15,7 @@ from app.plugins import _PluginBase
 from app.schemas import NotificationType
 from app.schemas.types import EventType
 
-from .api_client import ApiClientError
+from .api_client import ApiClientError, CLIENT_VERSION, is_newer_version
 from .auth_service import AuthService
 from .downloader_service import DownloaderService
 from .event_service import EventService
@@ -28,7 +28,7 @@ class UBencodeHelper(_PluginBase):
     plugin_name = "UBencode 助手"
     plugin_desc = "绑定压制中心、领取任务并将 UBits 源种推送到 MoviePilot 下载器。"
     plugin_icon = "ffmpeg.png"
-    plugin_version = "1.3.1"
+    plugin_version = "1.3.2"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy/MoviePilot-Plugins"
     plugin_config_prefix = "ubencodehelper_"
@@ -36,6 +36,7 @@ class UBencodeHelper(_PluginBase):
     auth_level = 2
 
     DEFAULT_CRON = "*/2 * * * *"
+    DEFAULT_VERSION_CHECK_CRON = "0 22 * * *"
     DEFAULT_CONFIG = {
         "enabled": False,
         "username": "",
@@ -44,6 +45,8 @@ class UBencodeHelper(_PluginBase):
         "category": "UBencode",
         "tags": "UBencode,待压制",
         "cron": DEFAULT_CRON,
+        "version_check_cron": DEFAULT_VERSION_CHECK_CRON,
+        "notify_version_update": True,
         "interactive_user_ids": "",
         "default_runtime_device": "",
         "runtime_page_size": 8,
@@ -80,6 +83,9 @@ class UBencodeHelper(_PluginBase):
         clean["category"] = str(clean.get("category") or "UBencode").strip()[:100]
         clean["tags"] = str(clean.get("tags") or "UBencode,待压制").strip()[:300]
         clean["cron"] = self._valid_cron(str(clean.get("cron") or ""))
+        clean["version_check_cron"] = self._valid_cron(
+            str(clean.get("version_check_cron") or ""), self.DEFAULT_VERSION_CHECK_CRON
+        )
         clean["interactive_user_ids"] = str(clean.get("interactive_user_ids") or "").strip()[:500]
         clean["default_runtime_device"] = str(clean.get("default_runtime_device") or "").strip()[:120]
         try:
@@ -91,12 +97,12 @@ class UBencodeHelper(_PluginBase):
             self.update_config(clean)
 
     @classmethod
-    def _valid_cron(cls, value: str) -> str:
+    def _valid_cron(cls, value: str, default: str = "") -> str:
         try:
             CronTrigger.from_crontab(value)
             return value
         except (TypeError, ValueError):
-            return cls.DEFAULT_CRON
+            return default or cls.DEFAULT_CRON
 
     def get_state(self) -> bool:
         auth = AuthService(self)
@@ -133,13 +139,24 @@ class UBencodeHelper(_PluginBase):
     def get_service(self) -> List[Dict[str, Any]]:
         if not self.get_state():
             return []
-        return [{
-            "id": "UBencodeHelper.Sync",
-            "name": "UBencode 助手状态同步",
-            "trigger": CronTrigger.from_crontab(self._config.get("cron") or self.DEFAULT_CRON),
-            "func": self.sync_task_status,
-            "kwargs": {},
-        }]
+        return [
+            {
+                "id": "UBencodeHelper.Sync",
+                "name": "UBencode 助手状态同步",
+                "trigger": CronTrigger.from_crontab(self._config.get("cron") or self.DEFAULT_CRON),
+                "func": self.sync_task_status,
+                "kwargs": {},
+            },
+            {
+                "id": "UBencodeHelper.VersionCheck",
+                "name": "UBencode 客户端更新检查",
+                "trigger": CronTrigger.from_crontab(
+                    self._config.get("version_check_cron") or self.DEFAULT_VERSION_CHECK_CRON
+                ),
+                "func": self.check_client_version_update,
+                "kwargs": {},
+            },
+        ]
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         auth = AuthService(self).auth_data()
@@ -198,7 +215,7 @@ class UBencodeHelper(_PluginBase):
             try {{
                 const r = await fetch('{endpoint}/preflight?apikey=' + encodeURIComponent({token}), {{
                     method: 'POST', headers: {{'Content-Type': 'application/json'}},
-                    body: JSON.stringify({{downloader: downloader || '', cron: cron || ''}})
+                    body: JSON.stringify({{downloader: downloader || '', cron: cron || '', version_check_cron: version_check_cron || ''}})
                 }});
                 const d = await r.json(); preflight_ok = !!d.ok; preflight_status = (d.results || []).join('；') || d.message || '预检失败';
             }} catch (_) {{ preflight_status = '完整预检请求失败'; }}
@@ -264,9 +281,16 @@ class UBencodeHelper(_PluginBase):
                     self._alert("{{ downloader_status }}", "{{ downloader_ok ? 'success' : 'info' }}"),
                 ]},
                 {"component": "VSheet", "props": {"class": "border rounded pa-4 mb-4"}, "content": [
-                    self._section_title("通知配置", "按 CRON 拉取事件，并通过 MoviePilot 插件通知渠道发送", "mdi-bell-outline"),
+                    self._section_title("通知配置", "按 CRON 拉取事件和检查客户端更新，并通过 MoviePilot 插件通知渠道发送", "mdi-bell-outline"),
                     {"component": "VRow", "content": [
                         self._col({"component": "VCronField", "props": {"model": "cron", "label": "事件同步 CRON"}}, 4),
+                        self._col({"component": "VCronField", "props": {"model": "version_check_cron", "label": "客户端更新检查 CRON（默认每天 22:00）"}}, 4),
+                        self._col({"component": "div", "content": [
+                            self._group_title("客户端更新", "mdi-update"),
+                            self._switch("notify_version_update", "发现新版本时通知"),
+                        ]}, 4),
+                    ]},
+                    {"component": "VRow", "content": [
                         self._col({"component": "div", "content": [
                             self._group_title("快速测压", "mdi-speedometer"),
                             self._switch("notify_quick_round", "每轮结果"),
@@ -430,6 +454,12 @@ class UBencodeHelper(_PluginBase):
         except (TypeError, ValueError):
             ok = False
             results.append("CRON 无效")
+        try:
+            CronTrigger.from_crontab(body.version_check_cron or self.DEFAULT_VERSION_CHECK_CRON)
+            results.append("客户端更新检查 CRON 有效")
+        except (TypeError, ValueError):
+            ok = False
+            results.append("客户端更新检查 CRON 无效")
         for checker in (self.api_check_auth, self.api_check_ubits):
             result = checker()
             ok = ok and bool(result.get("ok"))
@@ -523,6 +553,48 @@ class UBencodeHelper(_PluginBase):
                     title="UBencode 助手同步异常",
                     text=str(exc)[:200],
                 )
+            return {"ok": False, "message": str(exc)}
+
+    def check_client_version_update(self):
+        auth = AuthService(self)
+        try:
+            auth_status = auth.verify()
+            if not auth_status.get("ok"):
+                return {"ok": False, "message": str(auth_status.get("message") or "账号授权无效")}
+            release_result = auth.client().latest_release(auth.token())
+            release = dict(release_result.get("release") or {})
+            latest_version = str(release.get("version") or "").strip()
+            current_version = CLIENT_VERSION
+            if not is_newer_version(latest_version, current_version):
+                return {"ok": True, "updated": False, "current_version": current_version}
+
+            notice = dict(self.get_data("client_update_notice") or {})
+            if notice.get("notified_version") == latest_version:
+                return {"ok": True, "updated": True, "notified": False, "version": latest_version}
+            should_notify = bool(self._config.get("notify_version_update", True))
+            if not should_notify:
+                return {"ok": True, "updated": True, "notified": False, "version": latest_version}
+            self.post_message(
+                mtype=NotificationType.Plugin,
+                title=f"UBencode 客户端更新通知 · v{latest_version}",
+                text=NotificationService.client_update_text(release, current_version),
+            )
+            self.save_data(
+                "client_update_notice",
+                {
+                    "notified_version": latest_version,
+                    "checked_at": int(time.time()),
+                    "current_version": current_version,
+                },
+            )
+            return {
+                "ok": True,
+                "updated": True,
+                "notified": True,
+                "version": latest_version,
+            }
+        except (ApiClientError, RuntimeError) as exc:
+            logger.warning(f"UBencode 客户端更新检查失败：{str(exc)[:200]}")
             return {"ok": False, "message": str(exc)}
 
     def stop_service(self):

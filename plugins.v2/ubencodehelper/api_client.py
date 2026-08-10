@@ -1,3 +1,4 @@
+import re
 import secrets
 from typing import Any, Dict, List, Optional
 
@@ -6,7 +7,8 @@ import requests
 
 _CENTER_URL = "https://encode.wuzf.top:53501"
 _CLIENT_NAME = "UBencode"
-_CLIENT_VERSION = "1.5.3"
+CLIENT_VERSION = "1.6.2"
+_CLIENT_VERSION = CLIENT_VERSION
 
 
 class ApiClientError(RuntimeError):
@@ -59,6 +61,7 @@ class UBencodeApiClient:
                 "user disabled": "账号授权已停用",
                 "user expired": "账号授权已过期",
                 "task not found": "任务不存在",
+                "client version not allowed": "当前客户端版本不满足服务端要求",
             }
             raise ApiClientError(detail_map.get(detail, detail[:200]))
         if not isinstance(data, dict):
@@ -116,6 +119,14 @@ class UBencodeApiClient:
                 "version": _CLIENT_VERSION,
                 "device_id": self.device_id,
             },
+        )
+
+    def latest_release(self, token: str) -> Dict[str, Any]:
+        return self._request(
+            "GET",
+            "/api/ubencode/releases/latest",
+            token=token,
+            params={"client_version": _CLIENT_VERSION, "device_id": self.device_id},
         )
 
     def runtime_clients(self, token: str) -> List[dict]:
@@ -226,3 +237,14 @@ class UBencodeApiClient:
             "version": _CLIENT_VERSION,
             "device_id": self.device_id,
         }
+
+
+def version_key(value: str) -> tuple[int, ...]:
+    parts = [int(part) for part in re.findall(r"\d+", str(value or ""))]
+    return tuple(parts or [0])
+
+
+def is_newer_version(latest: str, current: str) -> bool:
+    latest_text = str(latest or "").strip()
+    current_text = str(current or "").strip()
+    return bool(latest_text and current_text and version_key(latest_text) > version_key(current_text))
