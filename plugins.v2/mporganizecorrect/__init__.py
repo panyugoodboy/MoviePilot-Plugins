@@ -40,7 +40,7 @@ class MPOrganizeCorrect(_PluginBase):
     plugin_name = "MP整理纠正"
     plugin_desc = "检查 MP 英文整理结果，按源文件片名和可选年份重新识别整理。"
     plugin_icon = "directory.png"
-    plugin_version = "1.0.4"
+    plugin_version = "1.0.5"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "mporganizecorrect_"
@@ -105,6 +105,10 @@ class MPOrganizeCorrect(_PluginBase):
             self._route("/overview", self._api_overview, ["GET"], "纠正状态总览"),
             self._route("/records", self._api_records, ["GET"], "待纠正记录列表"),
             self._route("/scan", self._api_scan, ["POST"], "扫描英文整理记录"),
+            self._route(
+                "/records/reset-scan", self._api_reset_scan, ["POST"],
+                "清除插件记录并按当前 MP 历史重扫",
+            ),
             self._route(
                 "/records/{history_id}/search", self._api_search, ["POST"], "人工搜索媒体候选"
             ),
@@ -215,6 +219,11 @@ class MPOrganizeCorrect(_PluginBase):
             self._run_scan,
             bool(payload.get("full")),
         )
+
+    def _api_reset_scan(self, payload: dict = Body(default={})) -> dict:
+        if not payload.get("confirmed"):
+            return self._error("必须确认只清除本插件记录并重新扫描")
+        return self._start_task("reset-scan", self._run_reset_scan)
 
     def _api_search(self, history_id: int, payload: dict = Body(default={})) -> dict:
         try:
@@ -338,6 +347,15 @@ class MPOrganizeCorrect(_PluginBase):
         self._notify_summary("全量扫描" if full else "增量扫描", result)
         return result
 
+    def _run_reset_scan(self) -> dict:
+        with self._poster_lock:
+            self._poster_urls.clear()
+        result = self._require_service().reset_and_scan(
+            progress=lambda value: self._set_task_progress("reset-scan", value),
+        )
+        self._notify_summary("清除记录并重扫", result)
+        return result
+
     def _run_correct(self, items: list, cleanup_old: bool) -> dict:
         result = self._require_service().correct_records(
             items,
@@ -376,8 +394,12 @@ class MPOrganizeCorrect(_PluginBase):
 
     def _start_task(self, name: str, func, *args) -> dict:
         with self._task_lock:
-            if (self._tasks.get(name) or {}).get("status") == "running":
-                return self._error(f"{name} 任务正在运行")
+            running = next((
+                task_name for task_name, task in self._tasks.items()
+                if task.get("status") == "running"
+            ), "")
+            if running:
+                return self._error(f"{running} 任务正在运行，请等待完成后再操作")
             self._tasks[name] = {
                 "status": "running",
                 "started_at": self._now(),

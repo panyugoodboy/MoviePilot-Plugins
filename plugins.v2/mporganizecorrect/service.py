@@ -71,6 +71,22 @@ class OrganizeCorrectService:
         finally:
             self._operation_lock.release()
 
+    def reset_and_scan(
+        self,
+        progress: Optional[Callable[[dict], None]] = None,
+    ) -> dict:
+        """清空插件纠正记录，再按当前 MoviePilot 整理历史全量重建。"""
+
+        if not self._operation_lock.acquire(blocking=False):
+            raise RuntimeError("已有扫描、纠正或清理任务正在运行")
+        try:
+            if progress:
+                progress({"current": 0, "total": 0, "message": "正在清除插件纠正记录"})
+            cleared = self.store.clear_records()
+            return {"cleared": cleared, **self._scan(full=True, progress=progress)}
+        finally:
+            self._operation_lock.release()
+
     def scheduled_run(
         self,
         progress: Optional[Callable[[dict], None]] = None,

@@ -336,6 +336,61 @@ def test_correct_all_ready_processes_every_ready_record(monkeypatch):
     assert captured["cleanup_old"] is True
 
 
+def test_reset_and_scan_clears_only_plugin_records_then_runs_full_scan(monkeypatch):
+    service_module, _, _ = load_service(monkeypatch)
+    events = []
+
+    class ResetStore:
+        def clear_records(self):
+            events.append("clear")
+            return 12
+
+    service = service_module.OrganizeCorrectService(ResetStore(), lambda: {})
+
+    def fake_scan(*, full, progress):
+        events.append(("scan", full))
+        progress({"current": 1, "total": 1, "message": "扫描完成"})
+        return {"checked": 8, "listed": 3, "ready": 2, "manual": 1, "failed": 0}
+
+    monkeypatch.setattr(service, "_scan", fake_scan)
+    progress = []
+
+    result = service.reset_and_scan(progress=progress.append)
+
+    assert events == ["clear", ("scan", True)]
+    assert result == {
+        "cleared": 12,
+        "checked": 8,
+        "listed": 3,
+        "ready": 2,
+        "manual": 1,
+        "failed": 0,
+    }
+    assert progress[0]["message"] == "正在清除插件纠正记录"
+
+
+def test_reset_and_scan_refuses_to_clear_during_another_operation(monkeypatch):
+    service_module, _, _ = load_service(monkeypatch)
+
+    class ResetStore:
+        cleared = False
+
+        def clear_records(self):
+            self.cleared = True
+            return 1
+
+    store = ResetStore()
+    service = service_module.OrganizeCorrectService(store, lambda: {})
+    service._operation_lock.acquire()
+    try:
+        with pytest.raises(RuntimeError, match="已有扫描、纠正或清理任务正在运行"):
+            service.reset_and_scan()
+    finally:
+        service._operation_lock.release()
+
+    assert store.cleared is False
+
+
 def test_manual_search_accepts_english_title_without_year_and_uses_fuzzy_query(monkeypatch):
     service_module, media_type, _ = load_service(monkeypatch)
     calls = []

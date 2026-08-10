@@ -177,6 +177,17 @@ class CorrectionStore:
             )
         return cursor.rowcount
 
+    def clear_records(self) -> int:
+        """清空本插件纠正记录和扫描游标，保留操作审计。"""
+
+        with self._connect() as connection:
+            count = int(connection.execute("SELECT COUNT(*) FROM corrections").fetchone()[0])
+            connection.execute("DELETE FROM corrections")
+            connection.execute(
+                "DELETE FROM metadata WHERE key IN ('last_scan_date', 'last_scan_at')"
+            )
+        return count
+
     def stats(self) -> dict:
         """汇总插件首页需要的状态数量。"""
 

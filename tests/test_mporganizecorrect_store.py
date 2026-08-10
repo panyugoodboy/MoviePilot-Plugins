@@ -88,3 +88,19 @@ def test_list_ready_has_no_limit_unless_explicitly_requested(tmp_path):
 
     assert len(store.list_ready()) == 75
     assert len(store.list_ready(5)) == 5
+
+
+def test_clear_records_keeps_audits_and_resets_scan_cursor(tmp_path):
+    store = store_module.CorrectionStore(tmp_path / "correct.db")
+    store.upsert_record(sample_record())
+    store.add_audit({"action": "correct", "history_id": 10})
+    store.set_meta("last_scan_date", "2026-08-10 10:00:00")
+    store.set_meta("last_scan_at", "2026-08-10T10:00:00+08:00")
+
+    cleared = store.clear_records()
+
+    assert cleared == 1
+    assert store.stats()["total"] == 0
+    assert store.list_audits()["total"] == 1
+    assert store.get_meta("last_scan_date", "") == ""
+    assert store.get_meta("last_scan_at", "") == ""

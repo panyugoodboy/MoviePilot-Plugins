@@ -28,6 +28,7 @@ const audits = reactive({ items: [], total: 0, page: 1 })
 const manualDialog = ref(false)
 const batchDialog = ref(false)
 const allDialog = ref(false)
+const resetDialog = ref(false)
 const deleteDialog = ref(false)
 const manualLoading = ref(false)
 const batchLoading = ref(false)
@@ -161,6 +162,20 @@ function startPolling() {
 
 async function scan(full = false) {
   await startTask('/scan', { full }, full ? '已开始全量扫描' : '已开始增量扫描')
+}
+
+function openResetScan() {
+  resetDialog.value = true
+}
+
+async function submitResetScan() {
+  resetDialog.value = false
+  records.page = 1
+  await startTask(
+    '/records/reset-scan',
+    { confirmed: true },
+    '已清除本插件旧记录并开始按当前 MoviePilot 整理历史全量重扫',
+  )
 }
 
 async function openBatch() {
@@ -390,7 +405,7 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
       </VWindowItem>
 
       <VWindowItem value="records">
-        <section class="section-heading"><div><h2>英文整理记录</h2><p>批量纠正只接受唯一精确匹配的电影；其他记录请人工选择候选。</p></div><div class="button-row"><VBtn class="action-btn" color="primary" prepend-icon="mdi-folder-multiple-check-outline" :disabled="hasRunningTask || !(bootstrap.stats?.ready > 0)" @click="openCorrectAll">一键全部纠正</VBtn><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-radar" :disabled="hasRunningTask" @click="scan(false)">增量扫描</VBtn><VBtn class="action-btn" variant="text" prepend-icon="mdi-database-refresh-outline" :disabled="hasRunningTask" @click="scan(true)">全量重扫</VBtn></div></section>
+        <section class="section-heading"><div><h2>英文整理记录</h2><p>批量纠正只接受唯一精确匹配的电影；其他记录请人工选择候选。</p></div><div class="button-row"><VBtn class="action-btn" color="primary" prepend-icon="mdi-folder-multiple-check-outline" :disabled="hasRunningTask || !(bootstrap.stats?.ready > 0)" @click="openCorrectAll">一键全部纠正</VBtn><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-radar" :disabled="hasRunningTask" @click="scan(false)">增量扫描</VBtn><VBtn class="action-btn" variant="text" prepend-icon="mdi-database-refresh-outline" :disabled="hasRunningTask" @click="scan(true)">全量重扫</VBtn><VBtn class="action-btn" color="warning" variant="text" prepend-icon="mdi-database-sync-outline" :disabled="hasRunningTask" @click="openResetScan">清除记录重新扫描</VBtn></div></section>
         <div class="filter-row"><VTextField v-model="records.keyword" label="搜索标题或路径" prepend-inner-icon="mdi-magnify" clearable hide-details @keyup.enter="records.page=1;loadRecords()" /><VSelect v-model="records.state" label="处理状态" :items="stateItems" hide-details @update:model-value="records.page=1;loadRecords()" /><VSelect v-model="records.media_type" label="媒体类型" :items="[{title:'全部',value:''},{title:'电影',value:'电影'},{title:'电视剧',value:'电视剧'}]" hide-details @update:model-value="records.page=1;loadRecords()" /><VBtn class="action-btn" variant="tonal" prepend-icon="mdi-filter-check-outline" @click="records.page=1;loadRecords()">筛选</VBtn></div>
         <div class="selection-bar"><span>已选择 {{ selected.length }} 条</span><VSpacer /><VBtn variant="text" prepend-icon="mdi-eye-off-outline" :disabled="!selected.length" @click="setIgnored(records.state !== 'ignored')">{{ records.state === 'ignored' ? '恢复' : '忽略' }}</VBtn><VBtn color="primary" variant="tonal" prepend-icon="mdi-folder-sync-outline" :disabled="!canBatch" :loading="batchLoading" @click="openBatch">批量纠正</VBtn><VBtn color="error" variant="text" prepend-icon="mdi-delete-outline" :disabled="!selected.length" @click="openDelete">删除</VBtn></div>
 
@@ -431,6 +446,10 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
 
     <VDialog v-model="allDialog" max-width="620">
       <VCard><VCardTitle>确认一键全部纠正</VCardTitle><VCardText><VAlert type="warning" variant="tonal" icon="mdi-folder-multiple-check-outline" class="mb-4">将处理全部 {{ bootstrap.stats?.ready || 0 }} 条可纠正记录，不受当前分页、筛选或批次数量限制。</VAlert><p>只处理中文片名、年份和媒体类型唯一精确匹配的电影。后台会对每条记录重新预览并验证新目标，失败记录不会删除旧媒体。</p><VSwitch v-model="manual.cleanup_old" label="新媒体与新记录验证成功后删除旧英文媒体" color="primary" /></VCardText><VCardActions><VSpacer /><VBtn variant="text" @click="allDialog=false">取消</VBtn><VBtn class="action-btn" color="primary" prepend-icon="mdi-folder-multiple-check-outline" @click="submitCorrectAll">全部纠正</VBtn></VCardActions></VCard>
+    </VDialog>
+
+    <VDialog v-model="resetDialog" max-width="620">
+      <VCard><VCardTitle>确认清除记录并重新扫描</VCardTitle><VCardText><VAlert type="warning" variant="tonal" icon="mdi-database-sync-outline" class="mb-4">请先等待 MoviePilot 手动整理完成，再执行本操作；重扫期间不要发起新的手动整理。</VAlert><p>只清空“MP整理纠正”插件内的待纠正记录、人工候选和忽略状态，然后按当前 MoviePilot 整理历史全量重建。MoviePilot 整理历史、操作审计、已整理媒体和源文件均不会删除。</p></VCardText><VCardActions><VSpacer /><VBtn variant="text" @click="resetDialog=false">取消</VBtn><VBtn class="action-btn" color="warning" prepend-icon="mdi-database-sync-outline" @click="submitResetScan">清除并重新扫描</VBtn></VCardActions></VCard>
     </VDialog>
 
     <VDialog v-model="deleteDialog" max-width="620">
