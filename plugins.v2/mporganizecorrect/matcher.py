@@ -13,9 +13,16 @@ LATIN_RE = re.compile(r"[A-Za-z]")
 YEAR_RE = re.compile(r"(?<!\d)(18\d{2}|19\d{2}|20\d{2}|2100)(?!\d)")
 TECH_RE = re.compile(
     r"(?i)(?:\bS\d{1,2}(?:E\d{1,4})?\b|\bE\d{1,4}\b|\b(?:2160|1080|720|480)p\b|"
-    r"\b(?:WEB[- .]?DL|BluRay|REMUX|HDTV|x26[45]|H[ .]?26[45]|HEVC|AVC|AAC|DTS|DDP?|HDR|DV)\b)"
+    r"\b(?:2160|1080|720|480)i\b|\b(?:WEB[- .]?DL|BluRay|REMUX|HDTV|UHD|x26[45]|"
+    r"H[ .]?26[45]|HEVC|AVC|AAC|DTS|DDP?|TRUEHD|ATMOS|HD[ .-]?MA|FLAC|AC3|EAC3|"
+    r"HDR|DV|10BIT|8BIT)\b)"
 )
 NOISE_RE = re.compile(r"[._]+")
+RELEASE_SUFFIX_RE = re.compile(
+    r"(?i)\s+(?:USA|FRA|GBR|GER|JPN|KOR|CHN|Director'?s[ .-]?Cut|Extended[ .-]?Cut|"
+    r"Unrated|Proper|Repack)\b.*$"
+)
+GENERIC_PATH_NAMES = {"download", "downloads", "movie", "movies", "media", "video", "videos"}
 
 
 def has_han(value: Any) -> bool:
@@ -59,21 +66,32 @@ def extract_source_identity(
     parsed_year: Any = "",
     history_year: Any = "",
 ) -> Tuple[str, int]:
-    """优先使用 MP 路径解析结果，再从源路径回退提取中文片名和年份。"""
+    """优先提取中文片名；没有中文时回退为清洗后的英文片名和年份。"""
 
     parsed = _clean_source_title(parsed_title)
     if has_han(parsed):
         return parsed, _valid_year(parsed_year) or _path_year(source) or _valid_year(history_year)
+    parsed_english = _clean_english_source_title(parsed_title)
 
     path = str(source or "").replace("\\", "/")
     parts = [part for part in path.split("/") if part][-4:]
-    candidates = []
+    chinese_candidates = []
+    english_candidates = []
     for index, part in enumerate(reversed(parts)):
         stem = Path(part).stem
         cleaned = _clean_source_title(stem)
         if has_han(cleaned):
-            candidates.append((len(HAN_RE.findall(cleaned)), -index, cleaned))
-    title = max(candidates, default=(0, 0, ""))[2]
+            chinese_candidates.append((len(HAN_RE.findall(cleaned)), -index, cleaned))
+            continue
+        english = _clean_english_source_title(stem)
+        if english and normalize_title(english) not in GENERIC_PATH_NAMES:
+            english_candidates.append((1 if index == 0 else 0, len(english), -index, english))
+    if chinese_candidates:
+        title = max(chinese_candidates, default=(0, 0, ""))[2]
+    elif parsed_english and normalize_title(parsed_english) not in GENERIC_PATH_NAMES:
+        title = parsed_english
+    else:
+        title = max(english_candidates, default=(0, 0, 0, ""))[3]
     return title, _valid_year(parsed_year) or _path_year(source) or _valid_year(history_year)
 
 
@@ -128,10 +146,12 @@ def choose_exact_candidate(
     media_type: Any,
     candidates: Iterable[Mapping[str, Any]],
 ) -> Tuple[Optional[dict], str]:
-    """只在中文标题、年份、类型均严格匹配且结果唯一时自动命中。"""
+    """只在中英文片名、年份、类型均严格匹配且结果唯一时自动命中。"""
 
     title_key = normalize_title(query_title)
     year = _valid_year(query_year)
+    if not year:
+        return None, "年份缺失，仅提供模糊搜索候选，需要人工选择"
     expected_type = _type_key(media_type)
     exact = []
     for candidate in candidates or []:
@@ -139,14 +159,18 @@ def choose_exact_candidate(
             continue
         if _valid_year(candidate.get("year")) != year:
             continue
-        titles = [candidate.get("title"), *(candidate.get("names") or [])]
+        titles = [
+            candidate.get("title"),
+            candidate.get("original_title"),
+            *(candidate.get("names") or []),
+        ]
         if title_key and title_key in {normalize_title(value) for value in titles if value}:
             exact.append(dict(candidate))
     if len(exact) == 1 and has_han(exact[0].get("title")):
-        return exact[0], "中文片名、年份和媒体类型唯一精确匹配"
+        return exact[0], "片名、年份和媒体类型唯一精确匹配"
     if len(exact) > 1:
         return None, f"找到 {len(exact)} 个精确候选，需要人工选择"
-    return None, "未找到中文片名、年份和媒体类型均完全一致的唯一候选"
+    return None, "未找到片名、年份和媒体类型均完全一致的唯一候选"
 
 
 def safe_transfer_mode(mode: Any) -> Optional[str]:
@@ -207,6 +231,19 @@ def _clean_source_title(value: Any) -> str:
     if suffix:
         end += suffix.end(1)
     return re.sub(r"\s+", " ", text[start:end]).strip(" -–—·:：()（）")[:120]
+
+
+def _clean_english_source_title(value: Any) -> str:
+    text = NOISE_RE.sub(" ", str(value or ""))
+    text = YEAR_RE.sub(" ", text)
+    text = TECH_RE.sub(" ", text)
+    text = re.sub(r"[\[\]【】{}<>《》()]", " ", text)
+    text = RELEASE_SUFFIX_RE.sub("", text)
+    text = re.sub(r"\s*-\s*[A-Za-z0-9][A-Za-z0-9._-]*$", "", text)
+    text = re.sub(r"\s+", " ", text).strip(" -–—·:：")
+    if not LATIN_RE.search(text) or has_han(text):
+        return ""
+    return text[:120]
 
 
 def _localized_title(media: Any) -> str:

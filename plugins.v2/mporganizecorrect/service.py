@@ -106,15 +106,17 @@ class OrganizeCorrectService:
         year: int,
         media_type: str,
     ) -> list[dict]:
-        """按人工修订的中文片名、年份和类型返回媒体候选。"""
+        """按中英文片名、可选年份和类型返回模糊搜索候选。"""
 
         if not self.store.get_record(history_id):
             raise ValueError("待纠正记录不存在")
-        if not has_han(title):
-            raise ValueError("搜索片名必须包含中文内容")
-        if not 1888 <= int(year or 0) <= 2100:
-            raise ValueError("年份必须是 1888–2100 的四位数字")
-        return self._search_candidates(title, int(year), media_type)
+        title = str(title or "").strip()
+        if not title:
+            raise ValueError("搜索片名不能为空")
+        year = self._int(year)
+        if year and not 1888 <= year <= 2100:
+            raise ValueError("年份必须是 1888–2100 的四位数字，或留空")
+        return self._search_candidates(title, year, media_type)
 
     def preview(self, history_id: int, candidate: Mapping[str, Any]) -> dict:
         """使用 MoviePilot 底层整理模块预览路径，全程不改记录也不动文件。"""
@@ -268,7 +270,10 @@ class OrganizeCorrectService:
                 progress({
                     "current": index,
                     "total": len(histories),
-                    "message": f"正在检查整理记录 {index}/{len(histories)}",
+                    "message": (
+                        f"正在检查 {index}/{len(histories)} · "
+                        f"{self._source_name(getattr(history, 'src', ''))}"
+                    ),
                 })
             try:
                 record = self._analyze_history(history)
@@ -313,15 +318,17 @@ class OrganizeCorrectService:
         elif not transfer_mode:
             state, reason = "manual", f"整理方式 {history.mode or '未知'} 无法确认不会删除源文件"
         elif not query_title:
-            state, reason = "manual", "源路径中未提取到中文片名"
-        elif not query_year:
-            state, reason = "manual", "源路径和整理记录中均未提取到有效年份"
+            state, reason = "manual", "源路径中未提取到可搜索片名"
         else:
             try:
                 options = self._search_candidates(query_title, query_year, history.type)
-                candidate, reason = choose_exact_candidate(
-                    query_title, query_year, history.type, options
-                )
+                if query_year:
+                    candidate, reason = choose_exact_candidate(
+                        query_title, query_year, history.type, options
+                    )
+                else:
+                    candidate = None
+                    reason = "年份未提取，已按片名模糊搜索，需要人工选择"
                 if candidate:
                     state = "ready" if self._media_type(history.type) == MediaType.MOVIE else "manual"
                     if state == "manual":
@@ -351,7 +358,10 @@ class OrganizeCorrectService:
         }
 
     def _search_candidates(self, title: str, year: int, media_type: str) -> list[dict]:
-        _, medias = MediaChain().search(f"{title} {year}")
+        query = f"{title} {year}" if year else title
+        _, medias = MediaChain().search(query)
+        if not medias and year:
+            _, medias = MediaChain().search(title)
         expected = self._media_type(media_type)
         results = []
         seen = set()
@@ -366,7 +376,7 @@ class OrganizeCorrectService:
             results.append(item)
         results.sort(
             key=lambda item: (
-                abs(int(item.get("year") or 0) - int(year)),
+                abs(int(item.get("year") or 0) - int(year)) if year else 0,
                 0 if has_han(item.get("title")) else 1,
                 str(item.get("title") or ""),
             )
@@ -435,14 +445,17 @@ class OrganizeCorrectService:
             history_id = int(value.get("history_id") or 0)
             record = None
             candidate = value.get("candidate") or {}
-            if progress:
-                progress({
-                    "current": index,
-                    "total": len(values),
-                    "message": f"正在纠正整理记录 {index}/{len(values)}",
-                })
             try:
                 record = self._require_record(history_id)
+                if progress:
+                    progress({
+                        "current": index,
+                        "total": len(values),
+                        "message": (
+                            f"正在纠正 {index}/{len(values)} · "
+                            f"{self._source_name(record.get('src'))}"
+                        ),
+                    })
                 if automatic and (record.get("state") != "ready" or self._media_type(record.get("media_type")) != MediaType.MOVIE):
                     raise RuntimeError("该记录不符合自动纠正条件")
                 candidate = candidate or record.get("candidate") or {}
@@ -730,6 +743,10 @@ class OrganizeCorrectService:
             return int(value)
         except (TypeError, ValueError):
             return 0
+
+    @staticmethod
+    def _source_name(value: Any) -> str:
+        return str(value or "未知源文件").replace("\\", "/").rsplit("/", 1)[-1]
 
     @staticmethod
     def _now() -> str:

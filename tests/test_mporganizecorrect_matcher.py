@@ -60,6 +60,28 @@ def test_source_identity_keeps_only_chinese_title_from_mixed_release_names():
         assert year == 2025
 
 
+def test_source_identity_falls_back_to_clean_english_title_and_year():
+    title, year = matcher.extract_source_identity(
+        r"D:\Downloads\The.Wandering.Earth.2019.2160p.WEB-DL.x265-GROUP.mkv",
+        parsed_title="",
+        parsed_year="",
+    )
+
+    assert title == "The Wandering Earth"
+    assert year == 2019
+
+
+def test_source_identity_still_prefers_chinese_path_over_parsed_english_title():
+    title, year = matcher.extract_source_identity(
+        r"D:\Downloads\流浪地球.2019\The.Wandering.Earth.2019.mkv",
+        parsed_title="The Wandering Earth",
+        parsed_year="2019",
+    )
+
+    assert title == "流浪地球"
+    assert year == 2019
+
+
 def test_exact_candidate_requires_unique_title_year_and_type():
     candidates = [
         {
@@ -81,6 +103,25 @@ def test_exact_candidate_requires_unique_title_year_and_type():
     ]
 
     selected, reason = matcher.choose_exact_candidate("流浪地球", 2019, "电影", candidates)
+
+    assert selected["media_id"] == "535167"
+    assert "唯一精确匹配" in reason
+
+
+def test_exact_candidate_accepts_english_original_title():
+    candidate = {
+        "title": "流浪地球",
+        "original_title": "The Wandering Earth",
+        "names": [],
+        "year": 2019,
+        "media_type": "电影",
+        "media_source": "themoviedb",
+        "media_id": "535167",
+    }
+
+    selected, reason = matcher.choose_exact_candidate(
+        "The Wandering Earth", 2019, "电影", [candidate]
+    )
 
     assert selected["media_id"] == "535167"
     assert "唯一精确匹配" in reason

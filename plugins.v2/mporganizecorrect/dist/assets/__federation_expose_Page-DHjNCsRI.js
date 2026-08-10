@@ -1,0 +1,1 @@
+import{importShared as t}from"./__federation_fn_import-E6wRZccp.js";import a from"./__federation_expose_AppPage-Cp2Ufapi.js";const{openBlock:o,createBlock:r}=await t("vue"),s={__name:"Page",props:{api:{type:Object,default:()=>({})}},setup(e){const p=e;return(c,i)=>(o(),r(a,{api:p.api,"plugin-id":"MPOrganizeCorrect"},null,8,["api"]))}};export{s as default};

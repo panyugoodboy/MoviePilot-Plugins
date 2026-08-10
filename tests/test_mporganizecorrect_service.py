@@ -329,3 +329,108 @@ def test_correct_all_ready_processes_every_ready_record(monkeypatch):
     assert result["total"] == 75
     assert captured["automatic"] is True
     assert captured["cleanup_old"] is True
+
+
+def test_manual_search_accepts_english_title_without_year_and_uses_fuzzy_query(monkeypatch):
+    service_module, media_type, _ = load_service(monkeypatch)
+    calls = []
+
+    class SearchMediaChain:
+        def search(self, query):
+            calls.append(query)
+            return None, [SimpleNamespace(
+                title="流浪地球",
+                original_title="The Wandering Earth",
+                names=[],
+                year=2019,
+                type=media_type.MOVIE,
+                source="themoviedb",
+                media_id="535167",
+                tmdb_id=535167,
+                douban_id=None,
+                bangumi_id=None,
+                anilist_id=None,
+                poster_path="",
+            )]
+
+    monkeypatch.setattr(service_module, "MediaChain", SearchMediaChain)
+    store = FakeStore({"history_id": 7})
+    service = service_module.OrganizeCorrectService(store, lambda: {})
+
+    results = service.search_record(
+        7,
+        title="The Wandering Earth",
+        year=0,
+        media_type="电影",
+    )
+
+    assert calls == ["The Wandering Earth"]
+    assert results[0]["title"] == "流浪地球"
+
+
+def test_correction_progress_displays_source_filename(monkeypatch):
+    service_module, _, _ = load_service(monkeypatch)
+    record = {
+        "history_id": 7,
+        "src": r"D:\Downloads\The.Wandering.Earth.2019.mkv",
+        "state": "ready",
+        "media_type": "电影",
+        "candidate": {"media_id": "535167"},
+    }
+    service = service_module.OrganizeCorrectService(FakeStore(record), lambda: {})
+    monkeypatch.setattr(
+        service,
+        "_correct_one",
+        lambda item, candidate, cleanup_old: {
+            "history_id": item["history_id"],
+            "success": True,
+        },
+    )
+    progress = []
+
+    result = service.correct_records(
+        [{"history_id": 7}],
+        cleanup_old=False,
+        progress=progress.append,
+    )
+
+    assert result["success"] == 1
+    assert "The.Wandering.Earth.2019.mkv" in progress[-1]["message"]
+
+
+def test_search_retries_without_year_after_year_query_misses(monkeypatch):
+    service_module, media_type, _ = load_service(monkeypatch)
+    calls = []
+
+    class SearchMediaChain:
+        def search(self, query):
+            calls.append(query)
+            if len(calls) == 1:
+                return None, []
+            return None, [SimpleNamespace(
+                title="流浪地球",
+                original_title="The Wandering Earth",
+                names=[],
+                year=2019,
+                type=media_type.MOVIE,
+                source="themoviedb",
+                media_id="535167",
+                tmdb_id=535167,
+                douban_id=None,
+                bangumi_id=None,
+                anilist_id=None,
+                poster_path="",
+            )]
+
+    monkeypatch.setattr(service_module, "MediaChain", SearchMediaChain)
+    service = service_module.OrganizeCorrectService(FakeStore({"history_id": 7}), lambda: {})
+
+    results = service.search_record(
+        7,
+        title="The Wandering Earth",
+        year=2019,
+        media_type="电影",
+    )
+
+    assert calls == ["The Wandering Earth 2019", "The Wandering Earth"]
+    assert results[0]["media_id"] == "535167"
