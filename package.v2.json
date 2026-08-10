@@ -688,6 +688,7 @@
     "icon": "ffmpeg.png",
     "author": "panyugoodboy",
     "level": 2,
+    "release": true,
     "history": {
       "v1.3.2": "新增客户端版本定时检查，默认每天22:00通知新版本并附带更新说明",
       "v1.3.1": "同步 UBencode 绝对码率通知，测压与正压结果改为显示 Mbps 和目标区间",
