@@ -36,6 +36,30 @@ def test_source_identity_falls_back_to_chinese_path_and_strips_technical_tokens(
     assert year == 2019
 
 
+def test_source_identity_keeps_only_chinese_title_from_mixed_release_names():
+    cases = {
+        "恶徒 Hell -HD MA 5": "恶徒",
+        "无望的人们 The Round Up USA -HD MA 2": "无望的人们",
+        "索命哨 Whistle -HD MA 5": "索命哨",
+        "碧海蓝天 The Big Blue Directors Cut FRA UHD -HD MA 5": "碧海蓝天",
+        "痴迷 Obsession USA UHD Atmos TrueHD 7": "痴迷",
+        "疾速追杀：芭蕾杀姬 Ballerina USA UHD Atmos TrueHD 7 1": "疾速追杀：芭蕾杀姬",
+        "独自一人 Alone FRA 1080i 2": "独自一人",
+        "K歌情人 Music and Lyrics": "K歌情人",
+        "007：无暇赴死 No Time to Die": "007：无暇赴死",
+        "阿凡达2 The Way of Water": "阿凡达2",
+    }
+
+    for parsed_title, expected_title in cases.items():
+        title, year = matcher.extract_source_identity(
+            rf"D:\Downloads\{parsed_title}.2025.mkv",
+            parsed_title=parsed_title,
+            parsed_year="2025",
+        )
+        assert title == expected_title
+        assert year == 2025
+
+
 def test_exact_candidate_requires_unique_title_year_and_type():
     candidates = [
         {

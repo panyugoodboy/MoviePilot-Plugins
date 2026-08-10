@@ -198,7 +198,15 @@ def _clean_source_title(value: Any) -> str:
     text = re.sub(r"\s+", " ", text).strip(" -–—·:：()（）")
     if not has_han(text):
         return ""
-    return text[:120]
+    matches = list(HAN_RE.finditer(text))
+    start, end = matches[0].start(), matches[-1].end()
+    prefix = re.search(r"(?<![A-Za-z0-9])([A-Za-z0-9]{1,3}[：:·・]?)$", text[:start])
+    suffix = re.match(r"([：:·・]?\d{1,3})(?!\d)", text[end:])
+    if prefix:
+        start = prefix.start(1)
+    if suffix:
+        end += suffix.end(1)
+    return re.sub(r"\s+", " ", text[start:end]).strip(" -–—·:：()（）")[:120]
 
 
 def _localized_title(media: Any) -> str:
