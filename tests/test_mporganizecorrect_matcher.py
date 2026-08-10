@@ -15,6 +15,37 @@ def test_english_destination_with_chinese_source_is_detected():
     assert matcher.is_english_label("流浪地球") is False
 
 
+def test_chinese_media_directory_is_not_replaced_by_english_storage_root():
+    label = matcher.destination_label(
+        "/LINK/电影/华语电影/求药 (2026)/求药 (2026)-2160p.mkv",
+        title="",
+        year="",
+    )
+
+    assert label == "求药 (2026)"
+    assert matcher.is_english_label(label) is False
+
+
+def test_destination_media_directory_overrides_stale_english_history_title():
+    label = matcher.destination_label(
+        "/LINK/电影/华语电影/求药 (2026)/求药 (2026)-2160p.mkv",
+        title="Searching For Medicine",
+        year="2026",
+    )
+
+    assert label == "求药 (2026)"
+
+
+def test_english_media_directory_is_detected_without_history_year():
+    label = matcher.destination_label(
+        "/LINK/电影/外语电影/Searching For Medicine (2026)/movie.mkv",
+        title="",
+        year="",
+    )
+
+    assert label == "Searching For Medicine (2026)"
+
+
 def test_source_identity_prefers_parsed_chinese_title_and_year():
     title, year = matcher.extract_source_identity(
         r"D:\Downloads\The.Wandering.Earth.2019.2160p.mkv",

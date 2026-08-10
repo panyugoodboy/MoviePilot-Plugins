@@ -15,9 +15,9 @@ def test_manifest_matches_plugin_version_and_safety_contract():
     entry = manifest["MPOrganizeCorrect"]
 
     assert entry["name"] == "MP整理纠正"
-    assert entry["version"] == "1.0.5"
+    assert entry["version"] == "1.0.6"
     assert entry["release"] is True
-    assert 'plugin_version = "1.0.5"' in source
+    assert 'plugin_version = "1.0.6"' in source
     assert '"scan_cron": "0 4 * * *"' in source
     assert '"auto_correct": False' in source
     assert '"cleanup_old_after_correct": True' in source

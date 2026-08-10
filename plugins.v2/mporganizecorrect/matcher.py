@@ -49,13 +49,19 @@ def destination_label(destination: Any, title: Any = "", year: Any = "") -> str:
     """从整理记录和目标路径中提取媒体目录显示名。"""
 
     history_title = str(title or "").strip()
-    if is_english_label(history_title):
-        return history_title
     parts = [part for part in str(destination or "").replace("\\", "/").split("/") if part]
+    directories = parts[:-1] or parts
     year_text = str(year or "").strip()
-    for part in reversed(parts[:-1] or parts):
-        if is_english_label(part) and (not year_text or year_text in part):
+    for part in reversed(directories):
+        if (YEAR_RE.search(part) or (year_text and year_text in part)) and (
+            has_han(part) or is_english_label(part)
+        ):
             return part
+    for part in reversed(directories):
+        if has_han(part):
+            return part
+    if directories and is_english_label(directories[-1]):
+        return directories[-1]
     return history_title
 
 

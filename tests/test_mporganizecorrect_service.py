@@ -121,6 +121,19 @@ def build_history(source, old_dest, *, history_id=7):
     )
 
 
+def test_scan_skips_history_whose_destination_media_directory_is_chinese(monkeypatch):
+    service_module, _, _ = load_service(monkeypatch)
+    history = build_history(
+        "/downloads/[求药].Searching.For.Medicine.2026.mkv",
+        "/LINK/电影/华语电影/求药 (2026)/求药 (2026)-2160p.mkv",
+    )
+    history.title = "Searching For Medicine"
+    history.year = "2026"
+    service = service_module.OrganizeCorrectService(object(), lambda: {})
+
+    assert service._analyze_history(history) is None
+
+
 def test_successful_correction_deletes_old_target_only_after_new_output_exists(tmp_path, monkeypatch):
     service_module, media_type, _ = load_service(monkeypatch)
     source = tmp_path / "流浪地球.2019.mkv"

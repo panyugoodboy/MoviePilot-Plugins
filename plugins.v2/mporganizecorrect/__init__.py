@@ -40,7 +40,7 @@ class MPOrganizeCorrect(_PluginBase):
     plugin_name = "MP整理纠正"
     plugin_desc = "检查 MP 英文整理结果，按源文件片名和可选年份重新识别整理。"
     plugin_icon = "directory.png"
-    plugin_version = "1.0.5"
+    plugin_version = "1.0.6"
     plugin_author = "panyugoodboy"
     author_url = "https://github.com/panyugoodboy"
     plugin_config_prefix = "mporganizecorrect_"
